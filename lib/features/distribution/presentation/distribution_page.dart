@@ -4,6 +4,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../../../core/db/db_provider.dart';
 import 'history_page.dart';
 import '../application/distribution_controller.dart';
+import 'live_map_page.dart';
 
 class DistributionPage extends ConsumerStatefulWidget {
   const DistributionPage({super.key});
@@ -118,6 +119,15 @@ class _DistributionPageState extends ConsumerState<DistributionPage> {
         title: const Text('Distribution'),
         actions: [
           IconButton(
+  icon: const Icon(Icons.map),
+  onPressed: () {
+    Navigator.of(context).push(
+      MaterialPageRoute(builder: (_) => const LiveMapPage()),
+    );
+  },
+),
+
+          IconButton( 
             icon: const Icon(Icons.history),
             onPressed: () {
               Navigator.of(context).push(

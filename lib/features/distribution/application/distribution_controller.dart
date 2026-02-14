@@ -1,21 +1,28 @@
 // lib/features/distribution/application/distribution_controller.dart
 import 'dart:async';
-import 'dart:math';
 
 import 'package:dio/dio.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:geolocator/geolocator.dart';
+import 'package:latlong2/latlong.dart';
 
 import '../../../core/db/app_db.dart';
 import '../../../core/db/db_provider.dart';
-import '../../../main.dart'; // dioProvider (si rouge, dis-moi et on le déplacera dans core/network)
+import '../../../main.dart'; // dioProvider
 import '../infrastructure/ban_api.dart';
+import '../infrastructure/ors_api.dart';
 import 'stop_detector.dart';
 
 enum DistributionRunState { running, paused }
 
 // deliveryStatus: 0=livré, 1=pas accès, 2=à vérifier
 class DistributionState {
+    // TRACK COMPLET (toute la tournée)
+  final List<LatLng> fullTrack;
+  final double totalDistanceMeters;
+  final Duration totalDuration;
+  final DateTime? sessionStart;
+
   final DistributionRunState runState;
 
   // compteur "livré" uniquement
@@ -27,27 +34,52 @@ class DistributionState {
   final int? pendingDepositId;
   final String? pendingAddressLabel;
 
+  // MAP LIVE
+  final LatLng? current; // position actuelle
+  final List<LatLng> route; // polyline ORS
+
   const DistributionState({
+        this.fullTrack = const [],
+    this.totalDistanceMeters = 0,
+    this.totalDuration = Duration.zero,
+    this.sessionStart,
+
     required this.runState,
     required this.totalDelivered,
     this.lastAddressLabel,
     this.pendingDepositId,
     this.pendingAddressLabel,
+    this.current,
+    this.route = const [],
   });
 
   DistributionState copyWith({
+        List<LatLng>? fullTrack,
+    double? totalDistanceMeters,
+    Duration? totalDuration,
+    DateTime? sessionStart,
+
     DistributionRunState? runState,
     int? totalDelivered,
     String? lastAddressLabel,
     int? pendingDepositId,
     String? pendingAddressLabel,
+    LatLng? current,
+    List<LatLng>? route,
   }) {
     return DistributionState(
+            fullTrack: fullTrack ?? this.fullTrack,
+      totalDistanceMeters: totalDistanceMeters ?? this.totalDistanceMeters,
+      totalDuration: totalDuration ?? this.totalDuration,
+      sessionStart: sessionStart ?? this.sessionStart,
+
       runState: runState ?? this.runState,
       totalDelivered: totalDelivered ?? this.totalDelivered,
       lastAddressLabel: lastAddressLabel ?? this.lastAddressLabel,
       pendingDepositId: pendingDepositId ?? this.pendingDepositId,
       pendingAddressLabel: pendingAddressLabel ?? this.pendingAddressLabel,
+      current: current ?? this.current,
+      route: route ?? this.route,
     );
   }
 }
@@ -57,21 +89,37 @@ class DistributionController extends StateNotifier<DistributionState> {
   final StopDetector _detector = StopDetector();
 
   final BanApi _ban;
+  final OrsApi _ors;
   final AppDb _db;
 
-  DistributionController(Dio dio, AppDb db)
+  // anti-spam routing
+  DateTime? _lastRouteAt;
+  LatLng? _lastRouteFrom;
+  bool _routingBusy = false;
+
+  DistributionController(Dio dio, AppDb db, OrsApi ors)
       : _ban = BanApi(dio),
         _db = db,
+        _ors = ors,
         super(const DistributionState(
           runState: DistributionRunState.paused,
           totalDelivered: 0,
           lastAddressLabel: null,
           pendingDepositId: null,
           pendingAddressLabel: null,
+          current: null,
+          route: [],
         ));
 
   Future<void> startOrResume() async {
     state = state.copyWith(runState: DistributionRunState.running);
+    // ✅ Démarre une session "tournée"
+    state = state.copyWith(
+      sessionStart: DateTime.now(),
+      fullTrack: const [],
+      totalDistanceMeters: 0,
+      totalDuration: Duration.zero,
+    );
 
     await _ensurePermissions();
 
@@ -85,6 +133,35 @@ class DistributionController extends StateNotifier<DistributionState> {
       ),
     ).listen((pos) {
       if (state.runState != DistributionRunState.running) return;
+      // ✅ TRACK COMPLET + distance + durée
+      final newPoint = LatLng(pos.latitude, pos.longitude);
+
+      final previousTrack = state.fullTrack;
+      var newDistance = state.totalDistanceMeters;
+
+      if (previousTrack.isNotEmpty) {
+        newDistance += const Distance().as(
+          LengthUnit.Meter,
+          previousTrack.last,
+          newPoint,
+        );
+      }
+
+      final start = state.sessionStart ?? DateTime.now();
+      final newDuration = DateTime.now().difference(start);
+
+      state = state.copyWith(
+        fullTrack: [...previousTrack, newPoint],
+        totalDistanceMeters: newDistance,
+        totalDuration: newDuration,
+      );
+
+      // ✅ position live (sert à la carte)
+      final cur = LatLng(pos.latitude, pos.longitude);
+      state = state.copyWith(current: cur);
+
+      // ✅ recalcul route (anti-spam)
+      _recomputeRouteIfNeeded();
 
       final fix = GpsFix(
         lat: pos.latitude,
@@ -106,6 +183,12 @@ class DistributionController extends StateNotifier<DistributionState> {
     await _sub?.cancel();
     _sub = null;
     _detector.resetAll();
+
+    // reset route
+    _lastRouteAt = null;
+    _lastRouteFrom = null;
+    _routingBusy = false;
+    state = state.copyWith(route: const []);
   }
 
   Future<void> confirmPendingDeposit(int newStatus) async {
@@ -124,64 +207,12 @@ class DistributionController extends StateNotifier<DistributionState> {
       pendingDepositId: null,
       pendingAddressLabel: null,
     );
+
+    // après une confirmation, on peut recalculer la route
+    _lastRouteAt = null;
+    _lastRouteFrom = null;
+    _recomputeRouteIfNeeded(force: true);
   }
-
-  // ---- Grouping helpers (immeubles) ----
-
-  double _distanceMeters(double lat1, double lon1, double lat2, double lon2) {
-    const r = 6371000.0; // rayon Terre en m
-    final dLat = (lat2 - lat1) * 0.017453292519943295;
-    final dLon = (lon2 - lon1) * 0.017453292519943295;
-
-    final a = (sin(dLat / 2) * sin(dLat / 2)) +
-        cos(lat1 * 0.017453292519943295) *
-            cos(lat2 * 0.017453292519943295) *
-            (sin(dLon / 2) * sin(dLon / 2));
-
-    final c = 2 * atan2(sqrt(a), sqrt(1 - a));
-    return r * c;
-  }
-
-  Future<int> _getOrCreateGroupId({
-    required double lat,
-    required double lon,
-    required String? addressLabel,
-  }) async {
-    const maxDist = 20.0; // mètres
-    const maxAge = Duration(minutes: 3);
-
-    final now = DateTime.now();
-    final since = now.subtract(maxAge);
-
-    final recent = await _db.getRecentGroups(since);
-
-    int? bestId;
-    double bestDist = 1e18;
-
-    for (final g in recent) {
-      // si label connu, on privilégie les labels identiques
-      if (addressLabel != null && g.addressLabel != null) {
-        if (g.addressLabel != addressLabel) continue;
-      }
-
-      final d = _distanceMeters(lat, lon, g.centerLat, g.centerLon);
-      if (d <= maxDist && d < bestDist) {
-        bestDist = d;
-        bestId = g.id;
-      }
-    }
-
-    if (bestId != null) return bestId;
-
-    return _db.createDeliveryGroup(
-      createdAt: now,
-      centerLat: lat,
-      centerLon: lon,
-      addressLabel: addressLabel,
-    );
-  }
-
-  // ---- Stop handling ----
 
   Future<void> _handleStop(StopEvent stop) async {
     try {
@@ -195,21 +226,15 @@ class DistributionController extends StateNotifier<DistributionState> {
           (stop.accuracyMedian <= 35) && (label != null) && label.contains(',');
 
       if (suspectedBuilding) {
-        final groupId = await _getOrCreateGroupId(
-          lat: stop.latMedian,
-          lon: stop.lonMedian,
-          addressLabel: label,
-        );
-
+        // Par défaut "À vérifier" (2)
         final depositId = await _db.insertDeposit(
           createdAt: DateTime.now(),
           lat: stop.latMedian,
           lon: stop.lonMedian,
           accuracy: stop.accuracyMedian,
           addressLabel: label,
-          deliveryStatus: 2, // à vérifier par défaut
+          deliveryStatus: 2,
           buildingSuspected: true,
-          groupId: groupId, // ✅ groupement
         );
 
         // Déclenche la question UI
@@ -218,7 +243,7 @@ class DistributionController extends StateNotifier<DistributionState> {
           pendingAddressLabel: label,
         );
       } else {
-        // Maison / pas immeuble -> Livré automatiquement
+        // Livré automatiquement
         await _db.insertDeposit(
           createdAt: DateTime.now(),
           lat: stop.latMedian,
@@ -227,7 +252,6 @@ class DistributionController extends StateNotifier<DistributionState> {
           addressLabel: label,
           deliveryStatus: 0,
           buildingSuspected: false,
-          groupId: null,
         );
 
         state = state.copyWith(totalDelivered: state.totalDelivered + 1);
@@ -242,13 +266,110 @@ class DistributionController extends StateNotifier<DistributionState> {
         addressLabel: null,
         deliveryStatus: 2,
         buildingSuspected: false,
-        groupId: null,
       );
 
       state = state.copyWith(
         pendingDepositId: depositId,
         pendingAddressLabel: null,
       );
+    } finally {
+      // après un nouveau dépôt, on autorise un recalcul rapide
+      _lastRouteAt = null;
+      _lastRouteFrom = null;
+      _recomputeRouteIfNeeded(force: true);
+    }
+  }
+
+  /// Recalcule une route ORS depuis la position actuelle vers le "prochain point utile".
+  /// - Priorité: ⚠️ (2) puis ❌ (1)
+  /// - Choisit le plus proche (distance GPS)
+  /// Anti-spam: au max toutes les 20s ou si déplacement > 80m (sauf force=true)
+  Future<void> _recomputeRouteIfNeeded({bool force = false}) async {
+    final cur = state.current;
+    if (cur == null) return;
+
+    // pas de route si on est en pause
+    if (state.runState != DistributionRunState.running) return;
+
+    final now = DateTime.now();
+
+    if (!force) {
+      final lastAt = _lastRouteAt;
+      final lastFrom = _lastRouteFrom;
+
+      final timeOk = lastAt == null || now.difference(lastAt).inSeconds >= 20;
+
+      var movedOk = true;
+      if (lastFrom != null) {
+        final dist = const Distance().as(LengthUnit.Meter, lastFrom, cur);
+        movedOk = dist >= 80;
+      }
+
+      if (!(timeOk || movedOk)) return;
+    }
+
+    if (_routingBusy) return;
+    _routingBusy = true;
+
+    _lastRouteAt = now;
+    _lastRouteFrom = cur;
+
+    try {
+      // On récupère les dépôts (pour l'instant simple: on prend tout)
+      final rows = await _db.watchAllDeposits().first;
+      if (rows.isEmpty) {
+        state = state.copyWith(route: const []);
+        return;
+      }
+
+      // Cibles: à vérifier puis pas accès
+      final candidatesReview = rows.where((d) => d.deliveryStatus == 2).toList();
+      final candidatesNoAccess =
+          rows.where((d) => d.deliveryStatus == 1).toList();
+
+      List<Deposit> candidates = candidatesReview.isNotEmpty
+          ? candidatesReview
+          : (candidatesNoAccess.isNotEmpty ? candidatesNoAccess : const []);
+
+      // Si aucune cible (tout livré), on ne trace rien
+      if (candidates.isEmpty) {
+        state = state.copyWith(route: const []);
+        return;
+      }
+
+      // Choix: le plus proche de la position actuelle
+      candidates.sort((a, b) {
+        final da = const Distance().as(
+          LengthUnit.Meter,
+          cur,
+          LatLng(a.lat, a.lon),
+        );
+        final dbb = const Distance().as(
+          LengthUnit.Meter,
+          cur,
+          LatLng(b.lat, b.lon),
+        );
+        return da.compareTo(dbb);
+      });
+
+      final dest = LatLng(candidates.first.lat, candidates.first.lon);
+
+      // Appel ORS -> geojson: liste de [lon,lat]
+      final coords = await _ors.directions(
+        coordinates: [
+          [cur.longitude, cur.latitude],
+          [dest.longitude, dest.latitude],
+        ],
+      );
+
+      // Convert -> LatLng (lat,lon)
+      final poly = coords.map((e) => LatLng(e[1], e[0])).toList();
+      state = state.copyWith(route: poly);
+    } catch (_) {
+      // réseau/quota/clé -> on vide la route pour éviter des erreurs UI
+      state = state.copyWith(route: const []);
+    } finally {
+      _routingBusy = false;
     }
   }
 
@@ -263,8 +384,7 @@ class DistributionController extends StateNotifier<DistributionState> {
       p = await Geolocator.requestPermission();
     }
 
-    if (p == LocationPermission.denied ||
-        p == LocationPermission.deniedForever) {
+    if (p == LocationPermission.denied || p == LocationPermission.deniedForever) {
       throw Exception('Permission localisation refusée');
     }
   }
@@ -278,8 +398,17 @@ class DistributionController extends StateNotifier<DistributionState> {
 
 final distributionControllerProvider =
     StateNotifierProvider<DistributionController, DistributionState>(
-  (ref) => DistributionController(
-    ref.read(dioProvider),
-    ref.read(appDbProvider),
-  ),
+  (ref) {
+    final dio = ref.read(dioProvider);
+    final db = ref.read(appDbProvider);
+
+    // clé ORS via: flutter run --dart-define=ORS_KEY=xxxxx
+    final orsKey = const String.fromEnvironment('ORS_KEY');
+
+    return DistributionController(
+      dio,
+      db,
+      OrsApi(dio, apiKey: orsKey),
+    );
+  },
 );
