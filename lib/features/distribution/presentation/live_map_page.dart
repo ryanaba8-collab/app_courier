@@ -57,7 +57,7 @@ class LiveMapPage extends ConsumerWidget {
           );
 
           final route = state.route;
-          final fullTrack = state.fullTrack;
+          final fullTrack = state.route;
 
           return FlutterMap(
             options: MapOptions(

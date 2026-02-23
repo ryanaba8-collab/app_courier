@@ -1,4 +1,3 @@
-// lib/features/distribution/application/distribution_controller.dart
 import 'dart:async';
 
 import 'package:dio/dio.dart';
@@ -8,58 +7,49 @@ import 'package:latlong2/latlong.dart';
 
 import '../../../core/db/app_db.dart';
 import '../../../core/db/db_provider.dart';
-import '../../../main.dart'; // dioProvider
+
 import '../infrastructure/ban_api.dart';
 import '../infrastructure/ors_api.dart';
 import 'stop_detector.dart';
+import '../../../core/network/dio_provider.dart';
+
 
 enum DistributionRunState { running, paused }
 
 // deliveryStatus: 0=livré, 1=pas accès, 2=à vérifier
 class DistributionState {
-    // TRACK COMPLET (toute la tournée)
-  final List<LatLng> fullTrack;
-  final double totalDistanceMeters;
-  final Duration totalDuration;
-  final DateTime? sessionStart;
-
   final DistributionRunState runState;
 
-  // compteur "livré" uniquement
+  /// ✅ pour afficher Commencer/Reprendre correctement
+  final bool hasStarted;
+
+  /// compteur "livré" uniquement
   final int totalDelivered;
 
   final String? lastAddressLabel;
 
-  // confirmation immeuble
+  /// confirmation immeuble
   final int? pendingDepositId;
   final String? pendingAddressLabel;
 
-  // MAP LIVE
-  final LatLng? current; // position actuelle
-  final List<LatLng> route; // polyline ORS
+  /// live map
+  final LatLng? current;
+  final List<LatLng> route;
 
   const DistributionState({
-        this.fullTrack = const [],
-    this.totalDistanceMeters = 0,
-    this.totalDuration = Duration.zero,
-    this.sessionStart,
-
     required this.runState,
+    required this.hasStarted,
     required this.totalDelivered,
     this.lastAddressLabel,
     this.pendingDepositId,
     this.pendingAddressLabel,
     this.current,
-    this.route = const [],
+    required this.route,
   });
 
   DistributionState copyWith({
-        List<LatLng>? fullTrack,
-    double? totalDistanceMeters,
-    Duration? totalDuration,
-    DateTime? sessionStart,
-
     DistributionRunState? runState,
+    bool? hasStarted,
     int? totalDelivered,
     String? lastAddressLabel,
     int? pendingDepositId,
@@ -68,12 +58,8 @@ class DistributionState {
     List<LatLng>? route,
   }) {
     return DistributionState(
-            fullTrack: fullTrack ?? this.fullTrack,
-      totalDistanceMeters: totalDistanceMeters ?? this.totalDistanceMeters,
-      totalDuration: totalDuration ?? this.totalDuration,
-      sessionStart: sessionStart ?? this.sessionStart,
-
       runState: runState ?? this.runState,
+      hasStarted: hasStarted ?? this.hasStarted,
       totalDelivered: totalDelivered ?? this.totalDelivered,
       lastAddressLabel: lastAddressLabel ?? this.lastAddressLabel,
       pendingDepositId: pendingDepositId ?? this.pendingDepositId,
@@ -92,17 +78,13 @@ class DistributionController extends StateNotifier<DistributionState> {
   final OrsApi _ors;
   final AppDb _db;
 
-  // anti-spam routing
-  DateTime? _lastRouteAt;
-  LatLng? _lastRouteFrom;
-  bool _routingBusy = false;
-
   DistributionController(Dio dio, AppDb db, OrsApi ors)
       : _ban = BanApi(dio),
         _db = db,
         _ors = ors,
         super(const DistributionState(
           runState: DistributionRunState.paused,
+          hasStarted: false,
           totalDelivered: 0,
           lastAddressLabel: null,
           pendingDepositId: null,
@@ -112,13 +94,10 @@ class DistributionController extends StateNotifier<DistributionState> {
         ));
 
   Future<void> startOrResume() async {
-    state = state.copyWith(runState: DistributionRunState.running);
-    // ✅ Démarre une session "tournée"
+    // ✅ démarre
     state = state.copyWith(
-      sessionStart: DateTime.now(),
-      fullTrack: const [],
-      totalDistanceMeters: 0,
-      totalDuration: Duration.zero,
+      runState: DistributionRunState.running,
+      hasStarted: true,
     );
 
     await _ensurePermissions();
@@ -133,35 +112,13 @@ class DistributionController extends StateNotifier<DistributionState> {
       ),
     ).listen((pos) {
       if (state.runState != DistributionRunState.running) return;
-      // ✅ TRACK COMPLET + distance + durée
-      final newPoint = LatLng(pos.latitude, pos.longitude);
 
-      final previousTrack = state.fullTrack;
-      var newDistance = state.totalDistanceMeters;
-
-      if (previousTrack.isNotEmpty) {
-        newDistance += const Distance().as(
-          LengthUnit.Meter,
-          previousTrack.last,
-          newPoint,
-        );
-      }
-
-      final start = state.sessionStart ?? DateTime.now();
-      final newDuration = DateTime.now().difference(start);
-
-      state = state.copyWith(
-        fullTrack: [...previousTrack, newPoint],
-        totalDistanceMeters: newDistance,
-        totalDuration: newDuration,
-      );
-
-      // ✅ position live (sert à la carte)
+      // ✅ MAJ position live
       final cur = LatLng(pos.latitude, pos.longitude);
       state = state.copyWith(current: cur);
 
-      // ✅ recalcul route (anti-spam)
-      _recomputeRouteIfNeeded();
+      // ⚠️ si tu veux recalculer route souvent : à faire avec prudence (coût ORS)
+      // _recomputeRouteIfNeeded(); // optionnel
 
       final fix = GpsFix(
         lat: pos.latitude,
@@ -183,12 +140,21 @@ class DistributionController extends StateNotifier<DistributionState> {
     await _sub?.cancel();
     _sub = null;
     _detector.resetAll();
+  }
 
-    // reset route
-    _lastRouteAt = null;
-    _lastRouteFrom = null;
-    _routingBusy = false;
-    state = state.copyWith(route: const []);
+  /// ✅ FIN DE TOURNÉE : stop + reset UI (bouton redevient "Commencer")
+  Future<void> endTour() async {
+    await pause();
+
+    state = state.copyWith(
+      hasStarted: false,
+      totalDelivered: 0,
+      lastAddressLabel: null,
+      pendingDepositId: null,
+      pendingAddressLabel: null,
+      current: null,
+      route: const [],
+    );
   }
 
   Future<void> confirmPendingDeposit(int newStatus) async {
@@ -207,15 +173,11 @@ class DistributionController extends StateNotifier<DistributionState> {
       pendingDepositId: null,
       pendingAddressLabel: null,
     );
-
-    // après une confirmation, on peut recalculer la route
-    _lastRouteAt = null;
-    _lastRouteFrom = null;
-    _recomputeRouteIfNeeded(force: true);
   }
 
   Future<void> _handleStop(StopEvent stop) async {
     try {
+      // Reverse BAN
       final addr = await _ban.reverse(lat: stop.latMedian, lon: stop.lonMedian);
       final label = addr?.label;
 
@@ -272,104 +234,6 @@ class DistributionController extends StateNotifier<DistributionState> {
         pendingDepositId: depositId,
         pendingAddressLabel: null,
       );
-    } finally {
-      // après un nouveau dépôt, on autorise un recalcul rapide
-      _lastRouteAt = null;
-      _lastRouteFrom = null;
-      _recomputeRouteIfNeeded(force: true);
-    }
-  }
-
-  /// Recalcule une route ORS depuis la position actuelle vers le "prochain point utile".
-  /// - Priorité: ⚠️ (2) puis ❌ (1)
-  /// - Choisit le plus proche (distance GPS)
-  /// Anti-spam: au max toutes les 20s ou si déplacement > 80m (sauf force=true)
-  Future<void> _recomputeRouteIfNeeded({bool force = false}) async {
-    final cur = state.current;
-    if (cur == null) return;
-
-    // pas de route si on est en pause
-    if (state.runState != DistributionRunState.running) return;
-
-    final now = DateTime.now();
-
-    if (!force) {
-      final lastAt = _lastRouteAt;
-      final lastFrom = _lastRouteFrom;
-
-      final timeOk = lastAt == null || now.difference(lastAt).inSeconds >= 20;
-
-      var movedOk = true;
-      if (lastFrom != null) {
-        final dist = const Distance().as(LengthUnit.Meter, lastFrom, cur);
-        movedOk = dist >= 80;
-      }
-
-      if (!(timeOk || movedOk)) return;
-    }
-
-    if (_routingBusy) return;
-    _routingBusy = true;
-
-    _lastRouteAt = now;
-    _lastRouteFrom = cur;
-
-    try {
-      // On récupère les dépôts (pour l'instant simple: on prend tout)
-      final rows = await _db.watchAllDeposits().first;
-      if (rows.isEmpty) {
-        state = state.copyWith(route: const []);
-        return;
-      }
-
-      // Cibles: à vérifier puis pas accès
-      final candidatesReview = rows.where((d) => d.deliveryStatus == 2).toList();
-      final candidatesNoAccess =
-          rows.where((d) => d.deliveryStatus == 1).toList();
-
-      List<Deposit> candidates = candidatesReview.isNotEmpty
-          ? candidatesReview
-          : (candidatesNoAccess.isNotEmpty ? candidatesNoAccess : const []);
-
-      // Si aucune cible (tout livré), on ne trace rien
-      if (candidates.isEmpty) {
-        state = state.copyWith(route: const []);
-        return;
-      }
-
-      // Choix: le plus proche de la position actuelle
-      candidates.sort((a, b) {
-        final da = const Distance().as(
-          LengthUnit.Meter,
-          cur,
-          LatLng(a.lat, a.lon),
-        );
-        final dbb = const Distance().as(
-          LengthUnit.Meter,
-          cur,
-          LatLng(b.lat, b.lon),
-        );
-        return da.compareTo(dbb);
-      });
-
-      final dest = LatLng(candidates.first.lat, candidates.first.lon);
-
-      // Appel ORS -> geojson: liste de [lon,lat]
-      final coords = await _ors.directions(
-        coordinates: [
-          [cur.longitude, cur.latitude],
-          [dest.longitude, dest.latitude],
-        ],
-      );
-
-      // Convert -> LatLng (lat,lon)
-      final poly = coords.map((e) => LatLng(e[1], e[0])).toList();
-      state = state.copyWith(route: poly);
-    } catch (_) {
-      // réseau/quota/clé -> on vide la route pour éviter des erreurs UI
-      state = state.copyWith(route: const []);
-    } finally {
-      _routingBusy = false;
     }
   }
 
@@ -396,19 +260,15 @@ class DistributionController extends StateNotifier<DistributionState> {
   }
 }
 
+/// ⚠️ Si ton provider ORS n’a pas ce nom, remplace `orsApiProvider` ici.
 final distributionControllerProvider =
     StateNotifierProvider<DistributionController, DistributionState>(
-  (ref) {
-    final dio = ref.read(dioProvider);
-    final db = ref.read(appDbProvider);
-
-    // clé ORS via: flutter run --dart-define=ORS_KEY=xxxxx
-    final orsKey = const String.fromEnvironment('ORS_KEY');
-
-    return DistributionController(
-      dio,
-      db,
-      OrsApi(dio, apiKey: orsKey),
-    );
-  },
+  (ref) => DistributionController(
+    ref.read(dioProvider),
+    ref.read(appDbProvider),
+    ref.read(orsApiProvider),
+  ),
 );
+
+
+
