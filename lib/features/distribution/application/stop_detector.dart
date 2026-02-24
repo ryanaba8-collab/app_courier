@@ -34,11 +34,11 @@ class StopEvent {
 
 class StopDetector {
   // Seuils (à ajuster)
-  final double stopSpeed = 0.3; // < 0.3 m/s = arrêt
-  final double walkSpeed = 0.8; // > 0.8 m/s = marche
+  final double stopSpeed = 0.5; // < 0.5 m/s = arrêt
+  final double walkSpeed = 1.0; // > 1.0 m/s = marche
   final Duration minStop = const Duration(seconds: 5);
   final Duration maxStop = const Duration(seconds: 60);
-  final Duration cooldown = const Duration(seconds: 25);
+  final Duration cooldown = const Duration(seconds: 18);
 
   DateTime? _maybeStopAt;
   final List<GpsFix> _stopPoints = [];
