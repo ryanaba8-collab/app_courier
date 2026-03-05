@@ -7,12 +7,12 @@ import 'package:latlong2/latlong.dart';
 
 import '../../../core/db/app_db.dart';
 import '../../../core/db/db_provider.dart';
+import '../../../core/network/dio_provider.dart';
 
 import '../infrastructure/ban_api.dart';
 import '../infrastructure/ors_api.dart';
-import 'stop_detector.dart';
-import '../../../core/network/dio_provider.dart';
-
+import 'stop_detector.dart'; // pour GpsFix
+import 'passage_detector.dart';
 
 enum DistributionRunState { running, paused }
 
@@ -20,7 +20,7 @@ enum DistributionRunState { running, paused }
 class DistributionState {
   final DistributionRunState runState;
 
-  /// ✅ pour afficher Commencer/Reprendre correctement
+  /// pour afficher Commencer/Reprendre correctement
   final bool hasStarted;
 
   /// compteur "livré" uniquement
@@ -72,11 +72,17 @@ class DistributionState {
 
 class DistributionController extends StateNotifier<DistributionState> {
   StreamSubscription<Position>? _sub;
-  final StopDetector _detector = StopDetector();
+
+  final PassageDetector _passageDetector = PassageDetector();
 
   final BanApi _ban;
   final OrsApi _ors;
   final AppDb _db;
+
+  // Anti-doublon simple (mémoire)
+  String? _lastSavedLabel;
+  DateTime? _lastSavedAt;
+  LatLng? _lastSavedPos;
 
   DistributionController(Dio dio, AppDb db, OrsApi ors)
       : _ban = BanApi(dio),
@@ -94,7 +100,6 @@ class DistributionController extends StateNotifier<DistributionState> {
         ));
 
   Future<void> startOrResume() async {
-    // ✅ démarre
     state = state.copyWith(
       runState: DistributionRunState.running,
       hasStarted: true,
@@ -103,7 +108,7 @@ class DistributionController extends StateNotifier<DistributionState> {
     await _ensurePermissions();
 
     await _sub?.cancel();
-    _detector.resetAll();
+    _passageDetector.resetAll();
 
     _sub = Geolocator.getPositionStream(
       locationSettings: const LocationSettings(
@@ -113,13 +118,6 @@ class DistributionController extends StateNotifier<DistributionState> {
     ).listen((pos) {
       if (state.runState != DistributionRunState.running) return;
 
-      // ✅ MAJ position live
-      final cur = LatLng(pos.latitude, pos.longitude);
-      state = state.copyWith(current: cur);
-
-      // ⚠️ si tu veux recalculer route souvent : à faire avec prudence (coût ORS)
-      // _recomputeRouteIfNeeded(); // optionnel
-
       final fix = GpsFix(
         lat: pos.latitude,
         lon: pos.longitude,
@@ -128,9 +126,17 @@ class DistributionController extends StateNotifier<DistributionState> {
         t: pos.timestamp,
       );
 
-      final stop = _detector.ingest(fix);
-      if (stop != null) {
-        _handleStop(stop);
+      // ✅ update position live
+      final cur = LatLng(fix.lat, fix.lon);
+      state = state.copyWith(current: cur);
+
+      // ✅ route "type apple watch" (petit filtrage)
+      _appendRoutePoint(cur, fix.accuracy);
+
+      // ✅ détection passage (au lieu d’un stop)
+      final passage = _passageDetector.ingest(fix);
+      if (passage != null) {
+        _handlePassage(passage);
       }
     });
   }
@@ -139,12 +145,16 @@ class DistributionController extends StateNotifier<DistributionState> {
     state = state.copyWith(runState: DistributionRunState.paused);
     await _sub?.cancel();
     _sub = null;
-    _detector.resetAll();
+    _passageDetector.resetAll();
   }
 
-  /// ✅ FIN DE TOURNÉE : stop + reset UI (bouton redevient "Commencer")
+  /// FIN DE TOURNÉE : stop + reset UI (bouton redevient "Commencer")
   Future<void> endTour() async {
     await pause();
+
+    _lastSavedLabel = null;
+    _lastSavedAt = null;
+    _lastSavedPos = null;
 
     state = state.copyWith(
       hasStarted: false,
@@ -156,84 +166,164 @@ class DistributionController extends StateNotifier<DistributionState> {
       route: const [],
     );
   }
+Future<void> markNoAd() async {
+  // 1) Tag le dernier dépôt si récent
+  final last = await _db.getLastDeposit();
 
+  if (last != null) {
+    final age = DateTime.now().difference(last.createdAt);
+
+    // si le dernier dépôt date de moins de 3 minutes -> on le marque noAd
+    if (age.inMinutes <= 3) {
+      await _db.setNoAdById(last.id, true);
+      return;
+    }
+  }
+
+  // 2) Sinon on crée un dépôt noAd basé sur la position actuelle
+  final cur = state.current;
+  if (cur == null) return;
+
+  final depositId = await _db.insertDeposit(
+    createdAt: DateTime.now(),
+    lat: cur.latitude,
+    lon: cur.longitude,
+    accuracy: 50, // valeur fallback simple (pas de debug)
+    addressLabel: state.lastAddressLabel,
+    deliveryStatus: 2, // "à vérifier" par défaut
+    buildingSuspected: false,
+    groupId: null,
+  );
+
+  await _db.setNoAdById(depositId, true);
+}
   Future<void> confirmPendingDeposit(int newStatus) async {
     final id = state.pendingDepositId;
     if (id == null) return;
 
     await _db.updateDepositStatusById(id, newStatus);
 
-    // Si livré -> on comptabilise
     if (newStatus == 0) {
       state = state.copyWith(totalDelivered: state.totalDelivered + 1);
     }
 
-    // Clear pending
     state = state.copyWith(
       pendingDepositId: null,
       pendingAddressLabel: null,
     );
   }
 
-  Future<void> _handleStop(StopEvent stop) async {
+  void _appendRoutePoint(LatLng cur, double acc) {
+    // trop imprécis => on n’enregistre pas dans le tracé
+    if (acc > 60) return;
+
+    final r = state.route;
+    if (r.isEmpty) {
+      state = state.copyWith(route: [cur]);
+      return;
+    }
+
+    final last = r.last;
+    final meters = const Distance().as(LengthUnit.Meter, last, cur);
+
+    // évite de spammer la liste (ajoute tous les ~3m)
+    if (meters >= 3) {
+      state = state.copyWith(route: [...r, cur]);
+    }
+  }
+
+  Future<void> _handlePassage(PassageEvent p) async {
+    // Quand accuracy > 30m : tu veux quand même enregistrer MAIS À VÉRIFIER
+    final forceReview = p.accuracy > 30;
+
+    // Anti-doublon par distance (utile si BAN rate)
+    if (_lastSavedPos != null) {
+      final d = const Distance().as(
+        LengthUnit.Meter,
+        _lastSavedPos!,
+        LatLng(p.lat, p.lon),
+      );
+      // Si on vient d’enregistrer très près, on laisse BAN gérer via label,
+      // mais on évite le spam si BAN ne répond pas.
+      if (d < 8 && _lastSavedAt != null && DateTime.now().difference(_lastSavedAt!) < const Duration(seconds: 8)) {
+        return;
+      }
+    }
+
     try {
-      // Reverse BAN
-      final addr = await _ban.reverse(lat: stop.latMedian, lon: stop.lonMedian);
+      // Reverse BAN (adresse)
+      final addr = await _ban.reverse(lat: p.lat, lon: p.lon);
       final label = addr?.label;
 
       state = state.copyWith(lastAddressLabel: label);
 
-      // Heuristique simple: "immeuble probable"
-      final suspectedBuilding =
-          (stop.accuracyMedian <= 35) && (label != null) && label.contains(',');
+      // Anti-doublon par adresse (le plus important)
+      if (label != null && _lastSavedLabel != null && label == _lastSavedLabel) {
+        final dt = _lastSavedAt == null ? 9999 : DateTime.now().difference(_lastSavedAt!).inSeconds;
+        if (dt < 45) {
+          return; // même adresse trop proche dans le temps
+        }
+      }
+
+      // Heuristique simple "immeuble probable" (si GPS bon)
+      final suspectedBuilding = !forceReview &&
+          (p.accuracy <= 35) &&
+          (label != null) &&
+          label.contains(',');
 
       if (suspectedBuilding) {
-        // Par défaut "À vérifier" (2)
+        // Par défaut "À vérifier" (2) + modal
         final depositId = await _db.insertDeposit(
           createdAt: DateTime.now(),
-          lat: stop.latMedian,
-          lon: stop.lonMedian,
-          accuracy: stop.accuracyMedian,
+          lat: p.lat,
+          lon: p.lon,
+          accuracy: p.accuracy,
           addressLabel: label,
           deliveryStatus: 2,
           buildingSuspected: true,
         );
 
-        // Déclenche la question UI
         state = state.copyWith(
           pendingDepositId: depositId,
           pendingAddressLabel: label,
         );
       } else {
-        // Livré automatiquement
+        // Ici: si accuracy > 30 => À vérifier, sinon Livré
+        final status = forceReview ? 2 : 0;
+
         await _db.insertDeposit(
           createdAt: DateTime.now(),
-          lat: stop.latMedian,
-          lon: stop.lonMedian,
-          accuracy: stop.accuracyMedian,
+          lat: p.lat,
+          lon: p.lon,
+          accuracy: p.accuracy,
           addressLabel: label,
-          deliveryStatus: 0,
+          deliveryStatus: status,
           buildingSuspected: false,
         );
 
-        state = state.copyWith(totalDelivered: state.totalDelivered + 1);
+        if (status == 0) {
+          state = state.copyWith(totalDelivered: state.totalDelivered + 1);
+        }
+
+        _lastSavedLabel = label;
+        _lastSavedAt = DateTime.now();
+        _lastSavedPos = LatLng(p.lat, p.lon);
       }
     } catch (_) {
       // BAN KO -> À vérifier
-      final depositId = await _db.insertDeposit(
+      await _db.insertDeposit(
         createdAt: DateTime.now(),
-        lat: stop.latMedian,
-        lon: stop.lonMedian,
-        accuracy: stop.accuracyMedian,
+        lat: p.lat,
+        lon: p.lon,
+        accuracy: p.accuracy,
         addressLabel: null,
         deliveryStatus: 2,
         buildingSuspected: false,
       );
 
-      state = state.copyWith(
-        pendingDepositId: depositId,
-        pendingAddressLabel: null,
-      );
+      _lastSavedLabel = null;
+      _lastSavedAt = DateTime.now();
+      _lastSavedPos = LatLng(p.lat, p.lon);
     }
   }
 
@@ -260,7 +350,14 @@ class DistributionController extends StateNotifier<DistributionState> {
   }
 }
 
-/// ⚠️ Si ton provider ORS n’a pas ce nom, remplace `orsApiProvider` ici.
+/// Provider ORS (si tu l’as déjà, garde le tien)
+final orsApiProvider = Provider<OrsApi>((ref) {
+  final dio = ref.read(dioProvider);
+  // ⚠️ Remplace par ta vraie clé (ou garde ta constante existante)
+  const apiKey = String.fromEnvironment('ORS_API_KEY', defaultValue: '');
+  return OrsApi(dio, apiKey: apiKey);
+});
+
 final distributionControllerProvider =
     StateNotifierProvider<DistributionController, DistributionState>(
   (ref) => DistributionController(
@@ -269,6 +366,3 @@ final distributionControllerProvider =
     ref.read(orsApiProvider),
   ),
 );
-
-
-

@@ -290,14 +290,36 @@ class _DistributionPageState extends ConsumerState<DistributionPage> {
 
             const Spacer(),
 
-            SizedBox(
-              width: double.infinity,
-              height: 56,
-              child: ElevatedButton(
-                onPressed: buttonAction,
-                child: Text(buttonLabel, style: const TextStyle(fontSize: 20)),
-              ),
-            ),
+           Row(
+  children: [
+    Expanded(
+      child: SizedBox(
+        height: 56,
+        child: ElevatedButton(
+          onPressed: buttonAction,
+          child: Text(buttonLabel, style: const TextStyle(fontSize: 20)),
+        ),
+      ),
+    ),
+    const SizedBox(width: 12),
+
+    // ✅ Bouton minimaliste "Pas de pub"
+    SizedBox(
+      height: 56,
+      child: OutlinedButton.icon(
+        onPressed: () async {
+          await controller.markNoAd(); // 👈 on va coder cette méthode
+          if (!context.mounted) return;
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(content: Text('✅ Marqué “Pas de pub”')),
+          );
+        },
+        icon: const Icon(Icons.block),
+        label: const Text('Pas de pub'),
+      ),
+    ),
+  ],
+),
           ],
         ),
       ),

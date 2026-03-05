@@ -110,6 +110,19 @@ class $DepositsTable extends Deposits with TableInfo<$DepositsTable, Deposit> {
     ),
     defaultValue: const Constant(false),
   );
+  static const VerificationMeta _noAdMeta = const VerificationMeta('noAd');
+  @override
+  late final GeneratedColumn<bool> noAd = GeneratedColumn<bool>(
+    'no_ad',
+    aliasedName,
+    false,
+    type: DriftSqlType.bool,
+    requiredDuringInsert: false,
+    defaultConstraints: GeneratedColumn.constraintIsAlways(
+      'CHECK ("no_ad" IN (0, 1))',
+    ),
+    defaultValue: const Constant(false),
+  );
   @override
   List<GeneratedColumn> get $columns => [
     id,
@@ -121,6 +134,7 @@ class $DepositsTable extends Deposits with TableInfo<$DepositsTable, Deposit> {
     groupId,
     deliveryStatus,
     buildingSuspected,
+    noAd,
   ];
   @override
   String get aliasedName => _alias ?? actualTableName;
@@ -202,6 +216,12 @@ class $DepositsTable extends Deposits with TableInfo<$DepositsTable, Deposit> {
         ),
       );
     }
+    if (data.containsKey('no_ad')) {
+      context.handle(
+        _noAdMeta,
+        noAd.isAcceptableOrUnknown(data['no_ad']!, _noAdMeta),
+      );
+    }
     return context;
   }
 
@@ -247,6 +267,10 @@ class $DepositsTable extends Deposits with TableInfo<$DepositsTable, Deposit> {
         DriftSqlType.bool,
         data['${effectivePrefix}building_suspected'],
       )!,
+      noAd: attachedDatabase.typeMapping.read(
+        DriftSqlType.bool,
+        data['${effectivePrefix}no_ad'],
+      )!,
     );
   }
 
@@ -266,6 +290,7 @@ class Deposit extends DataClass implements Insertable<Deposit> {
   final int? groupId;
   final int deliveryStatus;
   final bool buildingSuspected;
+  final bool noAd;
   const Deposit({
     required this.id,
     required this.createdAt,
@@ -276,6 +301,7 @@ class Deposit extends DataClass implements Insertable<Deposit> {
     this.groupId,
     required this.deliveryStatus,
     required this.buildingSuspected,
+    required this.noAd,
   });
   @override
   Map<String, Expression> toColumns(bool nullToAbsent) {
@@ -293,6 +319,7 @@ class Deposit extends DataClass implements Insertable<Deposit> {
     }
     map['delivery_status'] = Variable<int>(deliveryStatus);
     map['building_suspected'] = Variable<bool>(buildingSuspected);
+    map['no_ad'] = Variable<bool>(noAd);
     return map;
   }
 
@@ -311,6 +338,7 @@ class Deposit extends DataClass implements Insertable<Deposit> {
           : Value(groupId),
       deliveryStatus: Value(deliveryStatus),
       buildingSuspected: Value(buildingSuspected),
+      noAd: Value(noAd),
     );
   }
 
@@ -329,6 +357,7 @@ class Deposit extends DataClass implements Insertable<Deposit> {
       groupId: serializer.fromJson<int?>(json['groupId']),
       deliveryStatus: serializer.fromJson<int>(json['deliveryStatus']),
       buildingSuspected: serializer.fromJson<bool>(json['buildingSuspected']),
+      noAd: serializer.fromJson<bool>(json['noAd']),
     );
   }
   @override
@@ -344,6 +373,7 @@ class Deposit extends DataClass implements Insertable<Deposit> {
       'groupId': serializer.toJson<int?>(groupId),
       'deliveryStatus': serializer.toJson<int>(deliveryStatus),
       'buildingSuspected': serializer.toJson<bool>(buildingSuspected),
+      'noAd': serializer.toJson<bool>(noAd),
     };
   }
 
@@ -357,6 +387,7 @@ class Deposit extends DataClass implements Insertable<Deposit> {
     Value<int?> groupId = const Value.absent(),
     int? deliveryStatus,
     bool? buildingSuspected,
+    bool? noAd,
   }) => Deposit(
     id: id ?? this.id,
     createdAt: createdAt ?? this.createdAt,
@@ -367,6 +398,7 @@ class Deposit extends DataClass implements Insertable<Deposit> {
     groupId: groupId.present ? groupId.value : this.groupId,
     deliveryStatus: deliveryStatus ?? this.deliveryStatus,
     buildingSuspected: buildingSuspected ?? this.buildingSuspected,
+    noAd: noAd ?? this.noAd,
   );
   Deposit copyWithCompanion(DepositsCompanion data) {
     return Deposit(
@@ -385,6 +417,7 @@ class Deposit extends DataClass implements Insertable<Deposit> {
       buildingSuspected: data.buildingSuspected.present
           ? data.buildingSuspected.value
           : this.buildingSuspected,
+      noAd: data.noAd.present ? data.noAd.value : this.noAd,
     );
   }
 
@@ -399,7 +432,8 @@ class Deposit extends DataClass implements Insertable<Deposit> {
           ..write('addressLabel: $addressLabel, ')
           ..write('groupId: $groupId, ')
           ..write('deliveryStatus: $deliveryStatus, ')
-          ..write('buildingSuspected: $buildingSuspected')
+          ..write('buildingSuspected: $buildingSuspected, ')
+          ..write('noAd: $noAd')
           ..write(')'))
         .toString();
   }
@@ -415,6 +449,7 @@ class Deposit extends DataClass implements Insertable<Deposit> {
     groupId,
     deliveryStatus,
     buildingSuspected,
+    noAd,
   );
   @override
   bool operator ==(Object other) =>
@@ -428,7 +463,8 @@ class Deposit extends DataClass implements Insertable<Deposit> {
           other.addressLabel == this.addressLabel &&
           other.groupId == this.groupId &&
           other.deliveryStatus == this.deliveryStatus &&
-          other.buildingSuspected == this.buildingSuspected);
+          other.buildingSuspected == this.buildingSuspected &&
+          other.noAd == this.noAd);
 }
 
 class DepositsCompanion extends UpdateCompanion<Deposit> {
@@ -441,6 +477,7 @@ class DepositsCompanion extends UpdateCompanion<Deposit> {
   final Value<int?> groupId;
   final Value<int> deliveryStatus;
   final Value<bool> buildingSuspected;
+  final Value<bool> noAd;
   const DepositsCompanion({
     this.id = const Value.absent(),
     this.createdAt = const Value.absent(),
@@ -451,6 +488,7 @@ class DepositsCompanion extends UpdateCompanion<Deposit> {
     this.groupId = const Value.absent(),
     this.deliveryStatus = const Value.absent(),
     this.buildingSuspected = const Value.absent(),
+    this.noAd = const Value.absent(),
   });
   DepositsCompanion.insert({
     this.id = const Value.absent(),
@@ -462,6 +500,7 @@ class DepositsCompanion extends UpdateCompanion<Deposit> {
     this.groupId = const Value.absent(),
     this.deliveryStatus = const Value.absent(),
     this.buildingSuspected = const Value.absent(),
+    this.noAd = const Value.absent(),
   }) : createdAt = Value(createdAt),
        lat = Value(lat),
        lon = Value(lon),
@@ -476,6 +515,7 @@ class DepositsCompanion extends UpdateCompanion<Deposit> {
     Expression<int>? groupId,
     Expression<int>? deliveryStatus,
     Expression<bool>? buildingSuspected,
+    Expression<bool>? noAd,
   }) {
     return RawValuesInsertable({
       if (id != null) 'id': id,
@@ -487,6 +527,7 @@ class DepositsCompanion extends UpdateCompanion<Deposit> {
       if (groupId != null) 'group_id': groupId,
       if (deliveryStatus != null) 'delivery_status': deliveryStatus,
       if (buildingSuspected != null) 'building_suspected': buildingSuspected,
+      if (noAd != null) 'no_ad': noAd,
     });
   }
 
@@ -500,6 +541,7 @@ class DepositsCompanion extends UpdateCompanion<Deposit> {
     Value<int?>? groupId,
     Value<int>? deliveryStatus,
     Value<bool>? buildingSuspected,
+    Value<bool>? noAd,
   }) {
     return DepositsCompanion(
       id: id ?? this.id,
@@ -511,6 +553,7 @@ class DepositsCompanion extends UpdateCompanion<Deposit> {
       groupId: groupId ?? this.groupId,
       deliveryStatus: deliveryStatus ?? this.deliveryStatus,
       buildingSuspected: buildingSuspected ?? this.buildingSuspected,
+      noAd: noAd ?? this.noAd,
     );
   }
 
@@ -544,6 +587,9 @@ class DepositsCompanion extends UpdateCompanion<Deposit> {
     if (buildingSuspected.present) {
       map['building_suspected'] = Variable<bool>(buildingSuspected.value);
     }
+    if (noAd.present) {
+      map['no_ad'] = Variable<bool>(noAd.value);
+    }
     return map;
   }
 
@@ -558,7 +604,8 @@ class DepositsCompanion extends UpdateCompanion<Deposit> {
           ..write('addressLabel: $addressLabel, ')
           ..write('groupId: $groupId, ')
           ..write('deliveryStatus: $deliveryStatus, ')
-          ..write('buildingSuspected: $buildingSuspected')
+          ..write('buildingSuspected: $buildingSuspected, ')
+          ..write('noAd: $noAd')
           ..write(')'))
         .toString();
   }
@@ -997,6 +1044,7 @@ typedef $$DepositsTableCreateCompanionBuilder =
       Value<int?> groupId,
       Value<int> deliveryStatus,
       Value<bool> buildingSuspected,
+      Value<bool> noAd,
     });
 typedef $$DepositsTableUpdateCompanionBuilder =
     DepositsCompanion Function({
@@ -1009,6 +1057,7 @@ typedef $$DepositsTableUpdateCompanionBuilder =
       Value<int?> groupId,
       Value<int> deliveryStatus,
       Value<bool> buildingSuspected,
+      Value<bool> noAd,
     });
 
 class $$DepositsTableFilterComposer extends Composer<_$AppDb, $DepositsTable> {
@@ -1061,6 +1110,11 @@ class $$DepositsTableFilterComposer extends Composer<_$AppDb, $DepositsTable> {
 
   ColumnFilters<bool> get buildingSuspected => $composableBuilder(
     column: $table.buildingSuspected,
+    builder: (column) => ColumnFilters(column),
+  );
+
+  ColumnFilters<bool> get noAd => $composableBuilder(
+    column: $table.noAd,
     builder: (column) => ColumnFilters(column),
   );
 }
@@ -1118,6 +1172,11 @@ class $$DepositsTableOrderingComposer
     column: $table.buildingSuspected,
     builder: (column) => ColumnOrderings(column),
   );
+
+  ColumnOrderings<bool> get noAd => $composableBuilder(
+    column: $table.noAd,
+    builder: (column) => ColumnOrderings(column),
+  );
 }
 
 class $$DepositsTableAnnotationComposer
@@ -1161,6 +1220,9 @@ class $$DepositsTableAnnotationComposer
     column: $table.buildingSuspected,
     builder: (column) => column,
   );
+
+  GeneratedColumn<bool> get noAd =>
+      $composableBuilder(column: $table.noAd, builder: (column) => column);
 }
 
 class $$DepositsTableTableManager
@@ -1200,6 +1262,7 @@ class $$DepositsTableTableManager
                 Value<int?> groupId = const Value.absent(),
                 Value<int> deliveryStatus = const Value.absent(),
                 Value<bool> buildingSuspected = const Value.absent(),
+                Value<bool> noAd = const Value.absent(),
               }) => DepositsCompanion(
                 id: id,
                 createdAt: createdAt,
@@ -1210,6 +1273,7 @@ class $$DepositsTableTableManager
                 groupId: groupId,
                 deliveryStatus: deliveryStatus,
                 buildingSuspected: buildingSuspected,
+                noAd: noAd,
               ),
           createCompanionCallback:
               ({
@@ -1222,6 +1286,7 @@ class $$DepositsTableTableManager
                 Value<int?> groupId = const Value.absent(),
                 Value<int> deliveryStatus = const Value.absent(),
                 Value<bool> buildingSuspected = const Value.absent(),
+                Value<bool> noAd = const Value.absent(),
               }) => DepositsCompanion.insert(
                 id: id,
                 createdAt: createdAt,
@@ -1232,6 +1297,7 @@ class $$DepositsTableTableManager
                 groupId: groupId,
                 deliveryStatus: deliveryStatus,
                 buildingSuspected: buildingSuspected,
+                noAd: noAd,
               ),
           withReferenceMapper: (p0) => p0
               .map((e) => (e.readTable(table), BaseReferences(db, table, e)))

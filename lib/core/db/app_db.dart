@@ -29,6 +29,8 @@ class Deposits extends Table {
   // "immeuble probable"
   BoolColumn get buildingSuspected =>
       boolean().withDefault(const Constant(false))();
+  // ✅ "Pas de pub" (boîte aux lettres / adresse à éviter)
+  BoolColumn get noAd => boolean().withDefault(const Constant(false))();
 }
 
 class DeliveryGroups extends Table {
@@ -47,7 +49,7 @@ class AppDb extends _$AppDb {
   AppDb() : super(_openConnection());
 
   @override
-  int get schemaVersion => 3;
+  int get schemaVersion => 4;
 
   @override
   MigrationStrategy get migration => MigrationStrategy(
@@ -68,6 +70,9 @@ class AppDb extends _$AppDb {
             await m.addColumn(deposits, col('delivery_status'));
             await m.addColumn(deposits, col('building_suspected'));
           }
+          if (from < 4) {
+            await m.addColumn(deposits, col('no_ad'));
+          } 
         },
       );
 
@@ -101,6 +106,28 @@ class AppDb extends _$AppDb {
     return (update(deposits)..where((t) => t.id.equals(depositId))).write(
       DepositsCompanion(deliveryStatus: Value(newStatus)),
     );
+  }
+              Future<Deposit?> getLastDeposit() {
+    return (select(deposits)
+          ..orderBy([(t) => OrderingTerm.desc(t.createdAt)])
+          ..limit(1))
+        .getSingleOrNull();
+  }
+
+  Future<void> setNoAdById(int depositId, bool value) {
+    return (update(deposits)..where((t) => t.id.equals(depositId))).write(
+      DepositsCompanion(noAd: Value(value)),
+    );
+  }
+
+  Future<bool> hasNoAdForLabel(String label) async {
+    final q = selectOnly(deposits)
+      ..addColumns([deposits.id.count()])
+      ..where(deposits.noAd.equals(true) & deposits.addressLabel.equals(label));
+
+    final row = await q.getSingle();
+    final count = row.read(deposits.id.count()) ?? 0;
+    return count > 0;
   }
 
   // ---------- WATCH / QUERIES ----------
