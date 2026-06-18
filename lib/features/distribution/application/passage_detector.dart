@@ -88,20 +88,15 @@ class PassageDetector {
       return null;
     }
 
-    // Premier point candidat
-    if (_lastCandidateLat == null || _lastCandidateLon == null) {
-      _lastCandidateLat = fix.lat;
-      _lastCandidateLon = fix.lon;
-      _lastCandidateAt = fix.t;
-      _lastFix = fix;
-      return PassageEvent(
-        at: fix.t,
-        lat: fix.lat,
-        lon: fix.lon,
-        accuracy: fix.accuracy,
-        speed: fix.speed,
-      );
-    }
+    // Premier point candidat : on initialise seulement.
+// On ne crée pas de dépôt immédiatement au démarrage.
+if (_lastCandidateLat == null || _lastCandidateLon == null) {
+  _lastCandidateLat = fix.lat;
+  _lastCandidateLon = fix.lon;
+  _lastCandidateAt = fix.t;
+  _lastFix = fix;
+  return null;
+}
 
     // Distance depuis le dernier candidat
     final distFromLastCandidate = _haversineMeters(

@@ -13,7 +13,7 @@ import '../infrastructure/ban_api.dart';
 import '../infrastructure/ors_api.dart';
 import 'stop_detector.dart'; // pour GpsFix
 import 'passage_detector.dart';
-
+import '../../../core/gps/gps_stabilizer.dart';
 enum DistributionRunState { running, paused }
 
 // deliveryStatus: 0=livré, 1=pas accès, 2=à vérifier
@@ -78,7 +78,7 @@ class DistributionController extends StateNotifier<DistributionState> {
   final BanApi _ban;
   final OrsApi _ors;
   final AppDb _db;
-
+  final _gpsStabilizer = GpsStabilizer();
   // Anti-doublon simple (mémoire)
   String? _lastSavedLabel;
   DateTime? _lastSavedAt;
@@ -106,7 +106,7 @@ class DistributionController extends StateNotifier<DistributionState> {
     );
 
     await _ensurePermissions();
-
+    _gpsStabilizer.resetAll();
     await _sub?.cancel();
     _passageDetector.resetAll();
 
@@ -116,29 +116,42 @@ class DistributionController extends StateNotifier<DistributionState> {
         distanceFilter: 0,
       ),
     ).listen((pos) {
-      if (state.runState != DistributionRunState.running) return;
+  if (state.runState != DistributionRunState.running) return;
 
-      final fix = GpsFix(
-        lat: pos.latitude,
-        lon: pos.longitude,
-        accuracy: pos.accuracy,
-        speed: (pos.speed.isFinite && pos.speed >= 0) ? pos.speed : 0.0,
-        t: pos.timestamp,
-      );
+  // 1️⃣ on stabilise le GPS
+  final stable = _gpsStabilizer.ingest(
+    pos.latitude,
+    pos.longitude,
+    pos.accuracy,
+  );
 
-      // ✅ update position live
-      final cur = LatLng(fix.lat, fix.lon);
-      state = state.copyWith(current: cur);
+  // si point rejeté par le stabilisateur, on ignore
+  if (stable == null) return;
 
-      // ✅ route "type apple watch" (petit filtrage)
-      _appendRoutePoint(cur, fix.accuracy);
+  final speed = (pos.speed.isFinite && pos.speed >= 0) ? pos.speed : 0.0;
 
-      // ✅ détection passage (au lieu d’un stop)
-      final passage = _passageDetector.ingest(fix);
-      if (passage != null) {
-        _handlePassage(passage);
-      }
-    });
+  // 2️⃣ on utilise les coordonnées stabilisées
+  final fix = GpsFix(
+    lat: stable.lat,
+    lon: stable.lon,
+    accuracy: pos.accuracy,
+    speed: speed,
+    t: pos.timestamp,
+  );
+
+  // ✅ update position live
+  final cur = LatLng(fix.lat, fix.lon);
+  state = state.copyWith(current: cur);
+
+  // ✅ route "type apple watch" (petit filtrage)
+  _appendRoutePoint(cur, fix.accuracy);
+
+  // ✅ détection passage (au lieu d’un stop)
+  final passage = _passageDetector.ingest(fix);
+  if (passage != null) {
+    _handlePassage(passage);
+  }
+});
   }
 
   Future<void> pause() async {
