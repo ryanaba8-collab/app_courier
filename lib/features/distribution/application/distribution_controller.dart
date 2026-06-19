@@ -7,34 +7,30 @@ import 'package:latlong2/latlong.dart';
 
 import '../../../core/db/app_db.dart';
 import '../../../core/db/db_provider.dart';
+import '../../../core/gps/gps_stabilizer.dart';
 import '../../../core/network/dio_provider.dart';
 
 import '../infrastructure/ban_api.dart';
 import '../infrastructure/ors_api.dart';
-import 'stop_detector.dart'; // pour GpsFix
 import 'passage_detector.dart';
-import '../../../core/gps/gps_stabilizer.dart';
+import 'stop_detector.dart';
+
 enum DistributionRunState { running, paused }
 
-// deliveryStatus: 0=livré, 1=pas accès, 2=à vérifier
 class DistributionState {
   final DistributionRunState runState;
-
-  /// pour afficher Commencer/Reprendre correctement
   final bool hasStarted;
-
-  /// compteur "livré" uniquement
   final int totalDelivered;
 
   final String? lastAddressLabel;
 
-  /// confirmation immeuble
   final int? pendingDepositId;
   final String? pendingAddressLabel;
 
-  /// live map
   final LatLng? current;
   final List<LatLng> route;
+
+  final int? currentTourId;
 
   const DistributionState({
     required this.runState,
@@ -45,6 +41,7 @@ class DistributionState {
     this.pendingAddressLabel,
     this.current,
     required this.route,
+    this.currentTourId,
   });
 
   DistributionState copyWith({
@@ -56,16 +53,23 @@ class DistributionState {
     String? pendingAddressLabel,
     LatLng? current,
     List<LatLng>? route,
+    int? currentTourId,
+    bool clearPending = false,
+    bool clearTour = false,
   }) {
     return DistributionState(
       runState: runState ?? this.runState,
       hasStarted: hasStarted ?? this.hasStarted,
       totalDelivered: totalDelivered ?? this.totalDelivered,
       lastAddressLabel: lastAddressLabel ?? this.lastAddressLabel,
-      pendingDepositId: pendingDepositId ?? this.pendingDepositId,
-      pendingAddressLabel: pendingAddressLabel ?? this.pendingAddressLabel,
+      pendingDepositId:
+          clearPending ? null : (pendingDepositId ?? this.pendingDepositId),
+      pendingAddressLabel: clearPending
+          ? null
+          : (pendingAddressLabel ?? this.pendingAddressLabel),
       current: current ?? this.current,
       route: route ?? this.route,
+      currentTourId: clearTour ? null : (currentTourId ?? this.currentTourId),
     );
   }
 }
@@ -74,12 +78,12 @@ class DistributionController extends StateNotifier<DistributionState> {
   StreamSubscription<Position>? _sub;
 
   final PassageDetector _passageDetector = PassageDetector();
+  final GpsStabilizer _gpsStabilizer = GpsStabilizer();
 
   final BanApi _ban;
   final OrsApi _ors;
   final AppDb _db;
-  final _gpsStabilizer = GpsStabilizer();
-  // Anti-doublon simple (mémoire)
+
   String? _lastSavedLabel;
   DateTime? _lastSavedAt;
   LatLng? _lastSavedPos;
@@ -97,17 +101,31 @@ class DistributionController extends StateNotifier<DistributionState> {
           pendingAddressLabel: null,
           current: null,
           route: [],
+          currentTourId: null,
         ));
 
   Future<void> startOrResume() async {
+    await _ensurePermissions();
+
+    var tourId = state.currentTourId;
+
+    if (tourId == null) {
+      final now = DateTime.now();
+      tourId = await _db.createTour(
+        startedAt: now,
+        name: 'Tournée ${now.toIso8601String()}',
+      );
+    }
+
     state = state.copyWith(
       runState: DistributionRunState.running,
       hasStarted: true,
+      currentTourId: tourId,
     );
 
-    await _ensurePermissions();
-    _gpsStabilizer.resetAll();
     await _sub?.cancel();
+
+    _gpsStabilizer.resetAll();
     _passageDetector.resetAll();
 
     _sub = Geolocator.getPositionStream(
@@ -116,54 +134,56 @@ class DistributionController extends StateNotifier<DistributionState> {
         distanceFilter: 0,
       ),
     ).listen((pos) {
-  if (state.runState != DistributionRunState.running) return;
+      if (state.runState != DistributionRunState.running) return;
 
-  // 1️⃣ on stabilise le GPS
-  final stable = _gpsStabilizer.ingest(
-    pos.latitude,
-    pos.longitude,
-    pos.accuracy,
-  );
+      final stable = _gpsStabilizer.ingest(
+        pos.latitude,
+        pos.longitude,
+        pos.accuracy,
+      );
 
-  // si point rejeté par le stabilisateur, on ignore
-  if (stable == null) return;
+      if (stable == null) return;
 
-  final speed = (pos.speed.isFinite && pos.speed >= 0) ? pos.speed : 0.0;
+      final speed = (pos.speed.isFinite && pos.speed >= 0) ? pos.speed : 0.0;
 
-  // 2️⃣ on utilise les coordonnées stabilisées
-  final fix = GpsFix(
-    lat: stable.lat,
-    lon: stable.lon,
-    accuracy: pos.accuracy,
-    speed: speed,
-    t: pos.timestamp,
-  );
+      final fix = GpsFix(
+        lat: stable.lat,
+        lon: stable.lon,
+        accuracy: pos.accuracy,
+        speed: speed,
+        t: pos.timestamp,
+      );
 
-  // ✅ update position live
-  final cur = LatLng(fix.lat, fix.lon);
-  state = state.copyWith(current: cur);
+      final cur = LatLng(fix.lat, fix.lon);
+      state = state.copyWith(current: cur);
 
-  // ✅ route "type apple watch" (petit filtrage)
-  _appendRoutePoint(cur, fix.accuracy);
+      _appendRoutePoint(cur, fix.accuracy);
 
-  // ✅ détection passage (au lieu d’un stop)
-  final passage = _passageDetector.ingest(fix);
-  if (passage != null) {
-    _handlePassage(passage);
-  }
-});
+      final passage = _passageDetector.ingest(fix);
+      if (passage != null) {
+        _handlePassage(passage);
+      }
+    });
   }
 
   Future<void> pause() async {
     state = state.copyWith(runState: DistributionRunState.paused);
+
+    _gpsStabilizer.resetAll();
+    _passageDetector.resetAll();
+
     await _sub?.cancel();
     _sub = null;
-    _passageDetector.resetAll();
   }
 
-  /// FIN DE TOURNÉE : stop + reset UI (bouton redevient "Commencer")
   Future<void> endTour() async {
+    final tourId = state.currentTourId;
+
     await pause();
+
+    if (tourId != null) {
+      await _db.closeTour(tourId, DateTime.now());
+    }
 
     _lastSavedLabel = null;
     _lastSavedAt = null;
@@ -177,39 +197,42 @@ class DistributionController extends StateNotifier<DistributionState> {
       pendingAddressLabel: null,
       current: null,
       route: const [],
+      clearPending: true,
+      clearTour: true,
     );
   }
-Future<void> markNoAd() async {
-  // 1) Tag le dernier dépôt si récent
-  final last = await _db.getLastDeposit();
 
-  if (last != null) {
-    final age = DateTime.now().difference(last.createdAt);
+  Future<void> markNoAd() async {
+    final tourId = state.currentTourId;
+    final last = await _db.getLastDeposit(tourId: tourId);
 
-    // si le dernier dépôt date de moins de 3 minutes -> on le marque noAd
-    if (age.inMinutes <= 3) {
-      await _db.setNoAdById(last.id, true);
-      return;
+    if (last != null) {
+      final age = DateTime.now().difference(last.createdAt);
+
+      if (age.inMinutes <= 3) {
+        await _db.setNoAdById(last.id, true);
+        return;
+      }
     }
+
+    final cur = state.current;
+    if (cur == null) return;
+
+    final depositId = await _db.insertDeposit(
+      createdAt: DateTime.now(),
+      lat: cur.latitude,
+      lon: cur.longitude,
+      accuracy: 50,
+      addressLabel: state.lastAddressLabel,
+      deliveryStatus: 2,
+      buildingSuspected: false,
+      groupId: null,
+      tourId: tourId,
+    );
+
+    await _db.setNoAdById(depositId, true);
   }
 
-  // 2) Sinon on crée un dépôt noAd basé sur la position actuelle
-  final cur = state.current;
-  if (cur == null) return;
-
-  final depositId = await _db.insertDeposit(
-    createdAt: DateTime.now(),
-    lat: cur.latitude,
-    lon: cur.longitude,
-    accuracy: 50, // valeur fallback simple (pas de debug)
-    addressLabel: state.lastAddressLabel,
-    deliveryStatus: 2, // "à vérifier" par défaut
-    buildingSuspected: false,
-    groupId: null,
-  );
-
-  await _db.setNoAdById(depositId, true);
-}
   Future<void> confirmPendingDeposit(int newStatus) async {
     final id = state.pendingDepositId;
     if (id == null) return;
@@ -220,14 +243,10 @@ Future<void> markNoAd() async {
       state = state.copyWith(totalDelivered: state.totalDelivered + 1);
     }
 
-    state = state.copyWith(
-      pendingDepositId: null,
-      pendingAddressLabel: null,
-    );
+    state = state.copyWith(clearPending: true);
   }
 
   void _appendRoutePoint(LatLng cur, double acc) {
-    // trop imprécis => on n’enregistre pas dans le tracé
     if (acc > 60) return;
 
     final r = state.route;
@@ -237,55 +256,58 @@ Future<void> markNoAd() async {
     }
 
     final last = r.last;
-    final meters = const Distance().as(LengthUnit.Meter, last, cur);
+    final meters = const Distance().as(
+      LengthUnit.Meter,
+      last,
+      cur,
+    );
 
-    // évite de spammer la liste (ajoute tous les ~3m)
     if (meters >= 3) {
       state = state.copyWith(route: [...r, cur]);
     }
   }
 
   Future<void> _handlePassage(PassageEvent p) async {
-    // Quand accuracy > 30m : tu veux quand même enregistrer MAIS À VÉRIFIER
+    final tourId = state.currentTourId;
     final forceReview = p.accuracy > 30;
 
-    // Anti-doublon par distance (utile si BAN rate)
     if (_lastSavedPos != null) {
       final d = const Distance().as(
         LengthUnit.Meter,
         _lastSavedPos!,
         LatLng(p.lat, p.lon),
       );
-      // Si on vient d’enregistrer très près, on laisse BAN gérer via label,
-      // mais on évite le spam si BAN ne répond pas.
-      if (d < 8 && _lastSavedAt != null && DateTime.now().difference(_lastSavedAt!) < const Duration(seconds: 8)) {
+
+      if (d < 8 &&
+          _lastSavedAt != null &&
+          DateTime.now().difference(_lastSavedAt!) <
+              const Duration(seconds: 8)) {
         return;
       }
     }
 
     try {
-      // Reverse BAN (adresse)
       final addr = await _ban.reverse(lat: p.lat, lon: p.lon);
       final label = addr?.label;
 
       state = state.copyWith(lastAddressLabel: label);
 
-      // Anti-doublon par adresse (le plus important)
-      if (label != null && _lastSavedLabel != null && label == _lastSavedLabel) {
-        final dt = _lastSavedAt == null ? 9999 : DateTime.now().difference(_lastSavedAt!).inSeconds;
-        if (dt < 45) {
-          return; // même adresse trop proche dans le temps
-        }
+      if (label != null &&
+          _lastSavedLabel != null &&
+          label == _lastSavedLabel) {
+        final dt = _lastSavedAt == null
+            ? 9999
+            : DateTime.now().difference(_lastSavedAt!).inSeconds;
+
+        if (dt < 45) return;
       }
 
-      // Heuristique simple "immeuble probable" (si GPS bon)
       final suspectedBuilding = !forceReview &&
-          (p.accuracy <= 35) &&
-          (label != null) &&
+          p.accuracy <= 35 &&
+          label != null &&
           label.contains(',');
 
       if (suspectedBuilding) {
-        // Par défaut "À vérifier" (2) + modal
         final depositId = await _db.insertDeposit(
           createdAt: DateTime.now(),
           lat: p.lat,
@@ -294,6 +316,7 @@ Future<void> markNoAd() async {
           addressLabel: label,
           deliveryStatus: 2,
           buildingSuspected: true,
+          tourId: tourId,
         );
 
         state = state.copyWith(
@@ -301,7 +324,6 @@ Future<void> markNoAd() async {
           pendingAddressLabel: label,
         );
       } else {
-        // Ici: si accuracy > 30 => À vérifier, sinon Livré
         final status = forceReview ? 2 : 0;
 
         await _db.insertDeposit(
@@ -312,6 +334,7 @@ Future<void> markNoAd() async {
           addressLabel: label,
           deliveryStatus: status,
           buildingSuspected: false,
+          tourId: tourId,
         );
 
         if (status == 0) {
@@ -323,7 +346,6 @@ Future<void> markNoAd() async {
         _lastSavedPos = LatLng(p.lat, p.lon);
       }
     } catch (_) {
-      // BAN KO -> À vérifier
       await _db.insertDeposit(
         createdAt: DateTime.now(),
         lat: p.lat,
@@ -332,6 +354,7 @@ Future<void> markNoAd() async {
         addressLabel: null,
         deliveryStatus: 2,
         buildingSuspected: false,
+        tourId: tourId,
       );
 
       _lastSavedLabel = null;
@@ -351,7 +374,8 @@ Future<void> markNoAd() async {
       p = await Geolocator.requestPermission();
     }
 
-    if (p == LocationPermission.denied || p == LocationPermission.deniedForever) {
+    if (p == LocationPermission.denied ||
+        p == LocationPermission.deniedForever) {
       throw Exception('Permission localisation refusée');
     }
   }
@@ -363,10 +387,8 @@ Future<void> markNoAd() async {
   }
 }
 
-/// Provider ORS (si tu l’as déjà, garde le tien)
 final orsApiProvider = Provider<OrsApi>((ref) {
   final dio = ref.read(dioProvider);
-  // ⚠️ Remplace par ta vraie clé (ou garde ta constante existante)
   const apiKey = String.fromEnvironment('ORS_API_KEY', defaultValue: '');
   return OrsApi(dio, apiKey: apiKey);
 });

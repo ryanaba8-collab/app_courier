@@ -52,7 +52,7 @@ class GpsStabilizer {
     return StableGps(latAvg, lonAvg, accuracy);
   }
 
-  double _distance(lat1, lon1, lat2, lon2) {
+  double _distance(double lat1, double lon1, double lat2, double lon2) {
     const r = 6371000;
 
     final dLat = _rad(lat2 - lat1);

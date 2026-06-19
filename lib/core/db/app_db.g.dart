@@ -32,6 +32,15 @@ class $DepositsTable extends Deposits with TableInfo<$DepositsTable, Deposit> {
     type: DriftSqlType.dateTime,
     requiredDuringInsert: true,
   );
+  static const VerificationMeta _tourIdMeta = const VerificationMeta('tourId');
+  @override
+  late final GeneratedColumn<int> tourId = GeneratedColumn<int>(
+    'tour_id',
+    aliasedName,
+    true,
+    type: DriftSqlType.int,
+    requiredDuringInsert: false,
+  );
   static const VerificationMeta _latMeta = const VerificationMeta('lat');
   @override
   late final GeneratedColumn<double> lat = GeneratedColumn<double>(
@@ -127,6 +136,7 @@ class $DepositsTable extends Deposits with TableInfo<$DepositsTable, Deposit> {
   List<GeneratedColumn> get $columns => [
     id,
     createdAt,
+    tourId,
     lat,
     lon,
     accuracy,
@@ -158,6 +168,12 @@ class $DepositsTable extends Deposits with TableInfo<$DepositsTable, Deposit> {
       );
     } else if (isInserting) {
       context.missing(_createdAtMeta);
+    }
+    if (data.containsKey('tour_id')) {
+      context.handle(
+        _tourIdMeta,
+        tourId.isAcceptableOrUnknown(data['tour_id']!, _tourIdMeta),
+      );
     }
     if (data.containsKey('lat')) {
       context.handle(
@@ -239,6 +255,10 @@ class $DepositsTable extends Deposits with TableInfo<$DepositsTable, Deposit> {
         DriftSqlType.dateTime,
         data['${effectivePrefix}created_at'],
       )!,
+      tourId: attachedDatabase.typeMapping.read(
+        DriftSqlType.int,
+        data['${effectivePrefix}tour_id'],
+      ),
       lat: attachedDatabase.typeMapping.read(
         DriftSqlType.double,
         data['${effectivePrefix}lat'],
@@ -283,6 +303,7 @@ class $DepositsTable extends Deposits with TableInfo<$DepositsTable, Deposit> {
 class Deposit extends DataClass implements Insertable<Deposit> {
   final int id;
   final DateTime createdAt;
+  final int? tourId;
   final double lat;
   final double lon;
   final double accuracy;
@@ -294,6 +315,7 @@ class Deposit extends DataClass implements Insertable<Deposit> {
   const Deposit({
     required this.id,
     required this.createdAt,
+    this.tourId,
     required this.lat,
     required this.lon,
     required this.accuracy,
@@ -308,6 +330,9 @@ class Deposit extends DataClass implements Insertable<Deposit> {
     final map = <String, Expression>{};
     map['id'] = Variable<int>(id);
     map['created_at'] = Variable<DateTime>(createdAt);
+    if (!nullToAbsent || tourId != null) {
+      map['tour_id'] = Variable<int>(tourId);
+    }
     map['lat'] = Variable<double>(lat);
     map['lon'] = Variable<double>(lon);
     map['accuracy'] = Variable<double>(accuracy);
@@ -327,6 +352,9 @@ class Deposit extends DataClass implements Insertable<Deposit> {
     return DepositsCompanion(
       id: Value(id),
       createdAt: Value(createdAt),
+      tourId: tourId == null && nullToAbsent
+          ? const Value.absent()
+          : Value(tourId),
       lat: Value(lat),
       lon: Value(lon),
       accuracy: Value(accuracy),
@@ -350,6 +378,7 @@ class Deposit extends DataClass implements Insertable<Deposit> {
     return Deposit(
       id: serializer.fromJson<int>(json['id']),
       createdAt: serializer.fromJson<DateTime>(json['createdAt']),
+      tourId: serializer.fromJson<int?>(json['tourId']),
       lat: serializer.fromJson<double>(json['lat']),
       lon: serializer.fromJson<double>(json['lon']),
       accuracy: serializer.fromJson<double>(json['accuracy']),
@@ -366,6 +395,7 @@ class Deposit extends DataClass implements Insertable<Deposit> {
     return <String, dynamic>{
       'id': serializer.toJson<int>(id),
       'createdAt': serializer.toJson<DateTime>(createdAt),
+      'tourId': serializer.toJson<int?>(tourId),
       'lat': serializer.toJson<double>(lat),
       'lon': serializer.toJson<double>(lon),
       'accuracy': serializer.toJson<double>(accuracy),
@@ -380,6 +410,7 @@ class Deposit extends DataClass implements Insertable<Deposit> {
   Deposit copyWith({
     int? id,
     DateTime? createdAt,
+    Value<int?> tourId = const Value.absent(),
     double? lat,
     double? lon,
     double? accuracy,
@@ -391,6 +422,7 @@ class Deposit extends DataClass implements Insertable<Deposit> {
   }) => Deposit(
     id: id ?? this.id,
     createdAt: createdAt ?? this.createdAt,
+    tourId: tourId.present ? tourId.value : this.tourId,
     lat: lat ?? this.lat,
     lon: lon ?? this.lon,
     accuracy: accuracy ?? this.accuracy,
@@ -404,6 +436,7 @@ class Deposit extends DataClass implements Insertable<Deposit> {
     return Deposit(
       id: data.id.present ? data.id.value : this.id,
       createdAt: data.createdAt.present ? data.createdAt.value : this.createdAt,
+      tourId: data.tourId.present ? data.tourId.value : this.tourId,
       lat: data.lat.present ? data.lat.value : this.lat,
       lon: data.lon.present ? data.lon.value : this.lon,
       accuracy: data.accuracy.present ? data.accuracy.value : this.accuracy,
@@ -426,6 +459,7 @@ class Deposit extends DataClass implements Insertable<Deposit> {
     return (StringBuffer('Deposit(')
           ..write('id: $id, ')
           ..write('createdAt: $createdAt, ')
+          ..write('tourId: $tourId, ')
           ..write('lat: $lat, ')
           ..write('lon: $lon, ')
           ..write('accuracy: $accuracy, ')
@@ -442,6 +476,7 @@ class Deposit extends DataClass implements Insertable<Deposit> {
   int get hashCode => Object.hash(
     id,
     createdAt,
+    tourId,
     lat,
     lon,
     accuracy,
@@ -457,6 +492,7 @@ class Deposit extends DataClass implements Insertable<Deposit> {
       (other is Deposit &&
           other.id == this.id &&
           other.createdAt == this.createdAt &&
+          other.tourId == this.tourId &&
           other.lat == this.lat &&
           other.lon == this.lon &&
           other.accuracy == this.accuracy &&
@@ -470,6 +506,7 @@ class Deposit extends DataClass implements Insertable<Deposit> {
 class DepositsCompanion extends UpdateCompanion<Deposit> {
   final Value<int> id;
   final Value<DateTime> createdAt;
+  final Value<int?> tourId;
   final Value<double> lat;
   final Value<double> lon;
   final Value<double> accuracy;
@@ -481,6 +518,7 @@ class DepositsCompanion extends UpdateCompanion<Deposit> {
   const DepositsCompanion({
     this.id = const Value.absent(),
     this.createdAt = const Value.absent(),
+    this.tourId = const Value.absent(),
     this.lat = const Value.absent(),
     this.lon = const Value.absent(),
     this.accuracy = const Value.absent(),
@@ -493,6 +531,7 @@ class DepositsCompanion extends UpdateCompanion<Deposit> {
   DepositsCompanion.insert({
     this.id = const Value.absent(),
     required DateTime createdAt,
+    this.tourId = const Value.absent(),
     required double lat,
     required double lon,
     required double accuracy,
@@ -508,6 +547,7 @@ class DepositsCompanion extends UpdateCompanion<Deposit> {
   static Insertable<Deposit> custom({
     Expression<int>? id,
     Expression<DateTime>? createdAt,
+    Expression<int>? tourId,
     Expression<double>? lat,
     Expression<double>? lon,
     Expression<double>? accuracy,
@@ -520,6 +560,7 @@ class DepositsCompanion extends UpdateCompanion<Deposit> {
     return RawValuesInsertable({
       if (id != null) 'id': id,
       if (createdAt != null) 'created_at': createdAt,
+      if (tourId != null) 'tour_id': tourId,
       if (lat != null) 'lat': lat,
       if (lon != null) 'lon': lon,
       if (accuracy != null) 'accuracy': accuracy,
@@ -534,6 +575,7 @@ class DepositsCompanion extends UpdateCompanion<Deposit> {
   DepositsCompanion copyWith({
     Value<int>? id,
     Value<DateTime>? createdAt,
+    Value<int?>? tourId,
     Value<double>? lat,
     Value<double>? lon,
     Value<double>? accuracy,
@@ -546,6 +588,7 @@ class DepositsCompanion extends UpdateCompanion<Deposit> {
     return DepositsCompanion(
       id: id ?? this.id,
       createdAt: createdAt ?? this.createdAt,
+      tourId: tourId ?? this.tourId,
       lat: lat ?? this.lat,
       lon: lon ?? this.lon,
       accuracy: accuracy ?? this.accuracy,
@@ -565,6 +608,9 @@ class DepositsCompanion extends UpdateCompanion<Deposit> {
     }
     if (createdAt.present) {
       map['created_at'] = Variable<DateTime>(createdAt.value);
+    }
+    if (tourId.present) {
+      map['tour_id'] = Variable<int>(tourId.value);
     }
     if (lat.present) {
       map['lat'] = Variable<double>(lat.value);
@@ -598,6 +644,7 @@ class DepositsCompanion extends UpdateCompanion<Deposit> {
     return (StringBuffer('DepositsCompanion(')
           ..write('id: $id, ')
           ..write('createdAt: $createdAt, ')
+          ..write('tourId: $tourId, ')
           ..write('lat: $lat, ')
           ..write('lon: $lon, ')
           ..write('accuracy: $accuracy, ')
@@ -1018,11 +1065,309 @@ class DeliveryGroupsCompanion extends UpdateCompanion<DeliveryGroup> {
   }
 }
 
+class $ToursTable extends Tours with TableInfo<$ToursTable, Tour> {
+  @override
+  final GeneratedDatabase attachedDatabase;
+  final String? _alias;
+  $ToursTable(this.attachedDatabase, [this._alias]);
+  static const VerificationMeta _idMeta = const VerificationMeta('id');
+  @override
+  late final GeneratedColumn<int> id = GeneratedColumn<int>(
+    'id',
+    aliasedName,
+    false,
+    hasAutoIncrement: true,
+    type: DriftSqlType.int,
+    requiredDuringInsert: false,
+    defaultConstraints: GeneratedColumn.constraintIsAlways(
+      'PRIMARY KEY AUTOINCREMENT',
+    ),
+  );
+  static const VerificationMeta _startedAtMeta = const VerificationMeta(
+    'startedAt',
+  );
+  @override
+  late final GeneratedColumn<DateTime> startedAt = GeneratedColumn<DateTime>(
+    'started_at',
+    aliasedName,
+    false,
+    type: DriftSqlType.dateTime,
+    requiredDuringInsert: true,
+  );
+  static const VerificationMeta _endedAtMeta = const VerificationMeta(
+    'endedAt',
+  );
+  @override
+  late final GeneratedColumn<DateTime> endedAt = GeneratedColumn<DateTime>(
+    'ended_at',
+    aliasedName,
+    true,
+    type: DriftSqlType.dateTime,
+    requiredDuringInsert: false,
+  );
+  static const VerificationMeta _nameMeta = const VerificationMeta('name');
+  @override
+  late final GeneratedColumn<String> name = GeneratedColumn<String>(
+    'name',
+    aliasedName,
+    true,
+    type: DriftSqlType.string,
+    requiredDuringInsert: false,
+  );
+  @override
+  List<GeneratedColumn> get $columns => [id, startedAt, endedAt, name];
+  @override
+  String get aliasedName => _alias ?? actualTableName;
+  @override
+  String get actualTableName => $name;
+  static const String $name = 'tours';
+  @override
+  VerificationContext validateIntegrity(
+    Insertable<Tour> instance, {
+    bool isInserting = false,
+  }) {
+    final context = VerificationContext();
+    final data = instance.toColumns(true);
+    if (data.containsKey('id')) {
+      context.handle(_idMeta, id.isAcceptableOrUnknown(data['id']!, _idMeta));
+    }
+    if (data.containsKey('started_at')) {
+      context.handle(
+        _startedAtMeta,
+        startedAt.isAcceptableOrUnknown(data['started_at']!, _startedAtMeta),
+      );
+    } else if (isInserting) {
+      context.missing(_startedAtMeta);
+    }
+    if (data.containsKey('ended_at')) {
+      context.handle(
+        _endedAtMeta,
+        endedAt.isAcceptableOrUnknown(data['ended_at']!, _endedAtMeta),
+      );
+    }
+    if (data.containsKey('name')) {
+      context.handle(
+        _nameMeta,
+        name.isAcceptableOrUnknown(data['name']!, _nameMeta),
+      );
+    }
+    return context;
+  }
+
+  @override
+  Set<GeneratedColumn> get $primaryKey => {id};
+  @override
+  Tour map(Map<String, dynamic> data, {String? tablePrefix}) {
+    final effectivePrefix = tablePrefix != null ? '$tablePrefix.' : '';
+    return Tour(
+      id: attachedDatabase.typeMapping.read(
+        DriftSqlType.int,
+        data['${effectivePrefix}id'],
+      )!,
+      startedAt: attachedDatabase.typeMapping.read(
+        DriftSqlType.dateTime,
+        data['${effectivePrefix}started_at'],
+      )!,
+      endedAt: attachedDatabase.typeMapping.read(
+        DriftSqlType.dateTime,
+        data['${effectivePrefix}ended_at'],
+      ),
+      name: attachedDatabase.typeMapping.read(
+        DriftSqlType.string,
+        data['${effectivePrefix}name'],
+      ),
+    );
+  }
+
+  @override
+  $ToursTable createAlias(String alias) {
+    return $ToursTable(attachedDatabase, alias);
+  }
+}
+
+class Tour extends DataClass implements Insertable<Tour> {
+  final int id;
+  final DateTime startedAt;
+  final DateTime? endedAt;
+  final String? name;
+  const Tour({
+    required this.id,
+    required this.startedAt,
+    this.endedAt,
+    this.name,
+  });
+  @override
+  Map<String, Expression> toColumns(bool nullToAbsent) {
+    final map = <String, Expression>{};
+    map['id'] = Variable<int>(id);
+    map['started_at'] = Variable<DateTime>(startedAt);
+    if (!nullToAbsent || endedAt != null) {
+      map['ended_at'] = Variable<DateTime>(endedAt);
+    }
+    if (!nullToAbsent || name != null) {
+      map['name'] = Variable<String>(name);
+    }
+    return map;
+  }
+
+  ToursCompanion toCompanion(bool nullToAbsent) {
+    return ToursCompanion(
+      id: Value(id),
+      startedAt: Value(startedAt),
+      endedAt: endedAt == null && nullToAbsent
+          ? const Value.absent()
+          : Value(endedAt),
+      name: name == null && nullToAbsent ? const Value.absent() : Value(name),
+    );
+  }
+
+  factory Tour.fromJson(
+    Map<String, dynamic> json, {
+    ValueSerializer? serializer,
+  }) {
+    serializer ??= driftRuntimeOptions.defaultSerializer;
+    return Tour(
+      id: serializer.fromJson<int>(json['id']),
+      startedAt: serializer.fromJson<DateTime>(json['startedAt']),
+      endedAt: serializer.fromJson<DateTime?>(json['endedAt']),
+      name: serializer.fromJson<String?>(json['name']),
+    );
+  }
+  @override
+  Map<String, dynamic> toJson({ValueSerializer? serializer}) {
+    serializer ??= driftRuntimeOptions.defaultSerializer;
+    return <String, dynamic>{
+      'id': serializer.toJson<int>(id),
+      'startedAt': serializer.toJson<DateTime>(startedAt),
+      'endedAt': serializer.toJson<DateTime?>(endedAt),
+      'name': serializer.toJson<String?>(name),
+    };
+  }
+
+  Tour copyWith({
+    int? id,
+    DateTime? startedAt,
+    Value<DateTime?> endedAt = const Value.absent(),
+    Value<String?> name = const Value.absent(),
+  }) => Tour(
+    id: id ?? this.id,
+    startedAt: startedAt ?? this.startedAt,
+    endedAt: endedAt.present ? endedAt.value : this.endedAt,
+    name: name.present ? name.value : this.name,
+  );
+  Tour copyWithCompanion(ToursCompanion data) {
+    return Tour(
+      id: data.id.present ? data.id.value : this.id,
+      startedAt: data.startedAt.present ? data.startedAt.value : this.startedAt,
+      endedAt: data.endedAt.present ? data.endedAt.value : this.endedAt,
+      name: data.name.present ? data.name.value : this.name,
+    );
+  }
+
+  @override
+  String toString() {
+    return (StringBuffer('Tour(')
+          ..write('id: $id, ')
+          ..write('startedAt: $startedAt, ')
+          ..write('endedAt: $endedAt, ')
+          ..write('name: $name')
+          ..write(')'))
+        .toString();
+  }
+
+  @override
+  int get hashCode => Object.hash(id, startedAt, endedAt, name);
+  @override
+  bool operator ==(Object other) =>
+      identical(this, other) ||
+      (other is Tour &&
+          other.id == this.id &&
+          other.startedAt == this.startedAt &&
+          other.endedAt == this.endedAt &&
+          other.name == this.name);
+}
+
+class ToursCompanion extends UpdateCompanion<Tour> {
+  final Value<int> id;
+  final Value<DateTime> startedAt;
+  final Value<DateTime?> endedAt;
+  final Value<String?> name;
+  const ToursCompanion({
+    this.id = const Value.absent(),
+    this.startedAt = const Value.absent(),
+    this.endedAt = const Value.absent(),
+    this.name = const Value.absent(),
+  });
+  ToursCompanion.insert({
+    this.id = const Value.absent(),
+    required DateTime startedAt,
+    this.endedAt = const Value.absent(),
+    this.name = const Value.absent(),
+  }) : startedAt = Value(startedAt);
+  static Insertable<Tour> custom({
+    Expression<int>? id,
+    Expression<DateTime>? startedAt,
+    Expression<DateTime>? endedAt,
+    Expression<String>? name,
+  }) {
+    return RawValuesInsertable({
+      if (id != null) 'id': id,
+      if (startedAt != null) 'started_at': startedAt,
+      if (endedAt != null) 'ended_at': endedAt,
+      if (name != null) 'name': name,
+    });
+  }
+
+  ToursCompanion copyWith({
+    Value<int>? id,
+    Value<DateTime>? startedAt,
+    Value<DateTime?>? endedAt,
+    Value<String?>? name,
+  }) {
+    return ToursCompanion(
+      id: id ?? this.id,
+      startedAt: startedAt ?? this.startedAt,
+      endedAt: endedAt ?? this.endedAt,
+      name: name ?? this.name,
+    );
+  }
+
+  @override
+  Map<String, Expression> toColumns(bool nullToAbsent) {
+    final map = <String, Expression>{};
+    if (id.present) {
+      map['id'] = Variable<int>(id.value);
+    }
+    if (startedAt.present) {
+      map['started_at'] = Variable<DateTime>(startedAt.value);
+    }
+    if (endedAt.present) {
+      map['ended_at'] = Variable<DateTime>(endedAt.value);
+    }
+    if (name.present) {
+      map['name'] = Variable<String>(name.value);
+    }
+    return map;
+  }
+
+  @override
+  String toString() {
+    return (StringBuffer('ToursCompanion(')
+          ..write('id: $id, ')
+          ..write('startedAt: $startedAt, ')
+          ..write('endedAt: $endedAt, ')
+          ..write('name: $name')
+          ..write(')'))
+        .toString();
+  }
+}
+
 abstract class _$AppDb extends GeneratedDatabase {
   _$AppDb(QueryExecutor e) : super(e);
   $AppDbManager get managers => $AppDbManager(this);
   late final $DepositsTable deposits = $DepositsTable(this);
   late final $DeliveryGroupsTable deliveryGroups = $DeliveryGroupsTable(this);
+  late final $ToursTable tours = $ToursTable(this);
   @override
   Iterable<TableInfo<Table, Object?>> get allTables =>
       allSchemaEntities.whereType<TableInfo<Table, Object?>>();
@@ -1030,6 +1375,7 @@ abstract class _$AppDb extends GeneratedDatabase {
   List<DatabaseSchemaEntity> get allSchemaEntities => [
     deposits,
     deliveryGroups,
+    tours,
   ];
 }
 
@@ -1037,6 +1383,7 @@ typedef $$DepositsTableCreateCompanionBuilder =
     DepositsCompanion Function({
       Value<int> id,
       required DateTime createdAt,
+      Value<int?> tourId,
       required double lat,
       required double lon,
       required double accuracy,
@@ -1050,6 +1397,7 @@ typedef $$DepositsTableUpdateCompanionBuilder =
     DepositsCompanion Function({
       Value<int> id,
       Value<DateTime> createdAt,
+      Value<int?> tourId,
       Value<double> lat,
       Value<double> lon,
       Value<double> accuracy,
@@ -1075,6 +1423,11 @@ class $$DepositsTableFilterComposer extends Composer<_$AppDb, $DepositsTable> {
 
   ColumnFilters<DateTime> get createdAt => $composableBuilder(
     column: $table.createdAt,
+    builder: (column) => ColumnFilters(column),
+  );
+
+  ColumnFilters<int> get tourId => $composableBuilder(
+    column: $table.tourId,
     builder: (column) => ColumnFilters(column),
   );
 
@@ -1138,6 +1491,11 @@ class $$DepositsTableOrderingComposer
     builder: (column) => ColumnOrderings(column),
   );
 
+  ColumnOrderings<int> get tourId => $composableBuilder(
+    column: $table.tourId,
+    builder: (column) => ColumnOrderings(column),
+  );
+
   ColumnOrderings<double> get lat => $composableBuilder(
     column: $table.lat,
     builder: (column) => ColumnOrderings(column),
@@ -1193,6 +1551,9 @@ class $$DepositsTableAnnotationComposer
 
   GeneratedColumn<DateTime> get createdAt =>
       $composableBuilder(column: $table.createdAt, builder: (column) => column);
+
+  GeneratedColumn<int> get tourId =>
+      $composableBuilder(column: $table.tourId, builder: (column) => column);
 
   GeneratedColumn<double> get lat =>
       $composableBuilder(column: $table.lat, builder: (column) => column);
@@ -1255,6 +1616,7 @@ class $$DepositsTableTableManager
               ({
                 Value<int> id = const Value.absent(),
                 Value<DateTime> createdAt = const Value.absent(),
+                Value<int?> tourId = const Value.absent(),
                 Value<double> lat = const Value.absent(),
                 Value<double> lon = const Value.absent(),
                 Value<double> accuracy = const Value.absent(),
@@ -1266,6 +1628,7 @@ class $$DepositsTableTableManager
               }) => DepositsCompanion(
                 id: id,
                 createdAt: createdAt,
+                tourId: tourId,
                 lat: lat,
                 lon: lon,
                 accuracy: accuracy,
@@ -1279,6 +1642,7 @@ class $$DepositsTableTableManager
               ({
                 Value<int> id = const Value.absent(),
                 required DateTime createdAt,
+                Value<int?> tourId = const Value.absent(),
                 required double lat,
                 required double lon,
                 required double accuracy,
@@ -1290,6 +1654,7 @@ class $$DepositsTableTableManager
               }) => DepositsCompanion.insert(
                 id: id,
                 createdAt: createdAt,
+                tourId: tourId,
                 lat: lat,
                 lon: lon,
                 accuracy: accuracy,
@@ -1536,6 +1901,172 @@ typedef $$DeliveryGroupsTableProcessedTableManager =
       DeliveryGroup,
       PrefetchHooks Function()
     >;
+typedef $$ToursTableCreateCompanionBuilder =
+    ToursCompanion Function({
+      Value<int> id,
+      required DateTime startedAt,
+      Value<DateTime?> endedAt,
+      Value<String?> name,
+    });
+typedef $$ToursTableUpdateCompanionBuilder =
+    ToursCompanion Function({
+      Value<int> id,
+      Value<DateTime> startedAt,
+      Value<DateTime?> endedAt,
+      Value<String?> name,
+    });
+
+class $$ToursTableFilterComposer extends Composer<_$AppDb, $ToursTable> {
+  $$ToursTableFilterComposer({
+    required super.$db,
+    required super.$table,
+    super.joinBuilder,
+    super.$addJoinBuilderToRootComposer,
+    super.$removeJoinBuilderFromRootComposer,
+  });
+  ColumnFilters<int> get id => $composableBuilder(
+    column: $table.id,
+    builder: (column) => ColumnFilters(column),
+  );
+
+  ColumnFilters<DateTime> get startedAt => $composableBuilder(
+    column: $table.startedAt,
+    builder: (column) => ColumnFilters(column),
+  );
+
+  ColumnFilters<DateTime> get endedAt => $composableBuilder(
+    column: $table.endedAt,
+    builder: (column) => ColumnFilters(column),
+  );
+
+  ColumnFilters<String> get name => $composableBuilder(
+    column: $table.name,
+    builder: (column) => ColumnFilters(column),
+  );
+}
+
+class $$ToursTableOrderingComposer extends Composer<_$AppDb, $ToursTable> {
+  $$ToursTableOrderingComposer({
+    required super.$db,
+    required super.$table,
+    super.joinBuilder,
+    super.$addJoinBuilderToRootComposer,
+    super.$removeJoinBuilderFromRootComposer,
+  });
+  ColumnOrderings<int> get id => $composableBuilder(
+    column: $table.id,
+    builder: (column) => ColumnOrderings(column),
+  );
+
+  ColumnOrderings<DateTime> get startedAt => $composableBuilder(
+    column: $table.startedAt,
+    builder: (column) => ColumnOrderings(column),
+  );
+
+  ColumnOrderings<DateTime> get endedAt => $composableBuilder(
+    column: $table.endedAt,
+    builder: (column) => ColumnOrderings(column),
+  );
+
+  ColumnOrderings<String> get name => $composableBuilder(
+    column: $table.name,
+    builder: (column) => ColumnOrderings(column),
+  );
+}
+
+class $$ToursTableAnnotationComposer extends Composer<_$AppDb, $ToursTable> {
+  $$ToursTableAnnotationComposer({
+    required super.$db,
+    required super.$table,
+    super.joinBuilder,
+    super.$addJoinBuilderToRootComposer,
+    super.$removeJoinBuilderFromRootComposer,
+  });
+  GeneratedColumn<int> get id =>
+      $composableBuilder(column: $table.id, builder: (column) => column);
+
+  GeneratedColumn<DateTime> get startedAt =>
+      $composableBuilder(column: $table.startedAt, builder: (column) => column);
+
+  GeneratedColumn<DateTime> get endedAt =>
+      $composableBuilder(column: $table.endedAt, builder: (column) => column);
+
+  GeneratedColumn<String> get name =>
+      $composableBuilder(column: $table.name, builder: (column) => column);
+}
+
+class $$ToursTableTableManager
+    extends
+        RootTableManager<
+          _$AppDb,
+          $ToursTable,
+          Tour,
+          $$ToursTableFilterComposer,
+          $$ToursTableOrderingComposer,
+          $$ToursTableAnnotationComposer,
+          $$ToursTableCreateCompanionBuilder,
+          $$ToursTableUpdateCompanionBuilder,
+          (Tour, BaseReferences<_$AppDb, $ToursTable, Tour>),
+          Tour,
+          PrefetchHooks Function()
+        > {
+  $$ToursTableTableManager(_$AppDb db, $ToursTable table)
+    : super(
+        TableManagerState(
+          db: db,
+          table: table,
+          createFilteringComposer: () =>
+              $$ToursTableFilterComposer($db: db, $table: table),
+          createOrderingComposer: () =>
+              $$ToursTableOrderingComposer($db: db, $table: table),
+          createComputedFieldComposer: () =>
+              $$ToursTableAnnotationComposer($db: db, $table: table),
+          updateCompanionCallback:
+              ({
+                Value<int> id = const Value.absent(),
+                Value<DateTime> startedAt = const Value.absent(),
+                Value<DateTime?> endedAt = const Value.absent(),
+                Value<String?> name = const Value.absent(),
+              }) => ToursCompanion(
+                id: id,
+                startedAt: startedAt,
+                endedAt: endedAt,
+                name: name,
+              ),
+          createCompanionCallback:
+              ({
+                Value<int> id = const Value.absent(),
+                required DateTime startedAt,
+                Value<DateTime?> endedAt = const Value.absent(),
+                Value<String?> name = const Value.absent(),
+              }) => ToursCompanion.insert(
+                id: id,
+                startedAt: startedAt,
+                endedAt: endedAt,
+                name: name,
+              ),
+          withReferenceMapper: (p0) => p0
+              .map((e) => (e.readTable(table), BaseReferences(db, table, e)))
+              .toList(),
+          prefetchHooksCallback: null,
+        ),
+      );
+}
+
+typedef $$ToursTableProcessedTableManager =
+    ProcessedTableManager<
+      _$AppDb,
+      $ToursTable,
+      Tour,
+      $$ToursTableFilterComposer,
+      $$ToursTableOrderingComposer,
+      $$ToursTableAnnotationComposer,
+      $$ToursTableCreateCompanionBuilder,
+      $$ToursTableUpdateCompanionBuilder,
+      (Tour, BaseReferences<_$AppDb, $ToursTable, Tour>),
+      Tour,
+      PrefetchHooks Function()
+    >;
 
 class $AppDbManager {
   final _$AppDb _db;
@@ -1544,4 +2075,6 @@ class $AppDbManager {
       $$DepositsTableTableManager(_db, _db.deposits);
   $$DeliveryGroupsTableTableManager get deliveryGroups =>
       $$DeliveryGroupsTableTableManager(_db, _db.deliveryGroups);
+  $$ToursTableTableManager get tours =>
+      $$ToursTableTableManager(_db, _db.tours);
 }

@@ -3,7 +3,6 @@ import 'dart:io';
 
 import 'package:drift/drift.dart';
 import 'package:drift/native.dart';
-
 import 'package:path/path.dart' as p;
 import 'package:path_provider/path_provider.dart';
 
@@ -13,23 +12,24 @@ class Deposits extends Table {
   IntColumn get id => integer().autoIncrement()();
   DateTimeColumn get createdAt => dateTime()();
 
+  // Nouvelle notion de tournée
+  IntColumn get tourId => integer().nullable()();
+
   RealColumn get lat => real()();
   RealColumn get lon => real()();
   RealColumn get accuracy => real()();
 
-  // BAN label (ex: "10 Rue ... 750.. Paris")
   TextColumn get addressLabel => text().nullable()();
 
-  // Grouping (nullable)
   IntColumn get groupId => integer().nullable()();
 
-  // 0=livré, 1=pas accès, 2=à vérifier (par défaut)
+  // 0=livré, 1=pas accès, 2=à vérifier
   IntColumn get deliveryStatus => integer().withDefault(const Constant(2))();
 
-  // "immeuble probable"
   BoolColumn get buildingSuspected =>
       boolean().withDefault(const Constant(false))();
-  // ✅ "Pas de pub" (boîte aux lettres / adresse à éviter)
+
+  // Pas de pub
   BoolColumn get noAd => boolean().withDefault(const Constant(false))();
 }
 
@@ -37,19 +37,26 @@ class DeliveryGroups extends Table {
   IntColumn get id => integer().autoIncrement()();
   DateTimeColumn get createdAt => dateTime()();
 
-  TextColumn get addressId => text().nullable()(); // BAN id (optionnel)
+  TextColumn get addressId => text().nullable()();
   TextColumn get addressLabel => text().nullable()();
 
   RealColumn get centerLat => real()();
   RealColumn get centerLon => real()();
 }
 
-@DriftDatabase(tables: [Deposits, DeliveryGroups])
+class Tours extends Table {
+  IntColumn get id => integer().autoIncrement()();
+  DateTimeColumn get startedAt => dateTime()();
+  DateTimeColumn get endedAt => dateTime().nullable()();
+  TextColumn get name => text().nullable()();
+}
+
+@DriftDatabase(tables: [Deposits, DeliveryGroups, Tours])
 class AppDb extends _$AppDb {
   AppDb() : super(_openConnection());
 
   @override
-  int get schemaVersion => 4;
+  int get schemaVersion => 5;
 
   @override
   MigrationStrategy get migration => MigrationStrategy(
@@ -57,7 +64,6 @@ class AppDb extends _$AppDb {
           await m.createAll();
         },
         onUpgrade: (m, from, to) async {
-          // Drift veut une GeneratedColumn<Object> pour addColumn
           GeneratedColumn<Object> col(String name) =>
               deposits.$columns.singleWhere((c) => c.$name == name);
 
@@ -70,11 +76,69 @@ class AppDb extends _$AppDb {
             await m.addColumn(deposits, col('delivery_status'));
             await m.addColumn(deposits, col('building_suspected'));
           }
+
           if (from < 4) {
             await m.addColumn(deposits, col('no_ad'));
-          } 
+          }
+
+          if (from < 5) {
+            await m.createTable(tours);
+            await m.addColumn(deposits, col('tour_id'));
+          }
         },
       );
+
+  // ---------- TOURS ----------
+
+  Future<int> createTour({
+    required DateTime startedAt,
+    String? name,
+  }) {
+    return into(tours).insert(
+      ToursCompanion.insert(
+        startedAt: startedAt,
+        name: Value(name),
+      ),
+    );
+  }
+
+  Future<void> closeTour(int tourId, DateTime endedAt) {
+    return (update(tours)..where((t) => t.id.equals(tourId))).write(
+      ToursCompanion(endedAt: Value(endedAt)),
+    );
+  }
+
+  Future<List<Tour>> getAllTours() {
+    return (select(tours)..orderBy([(t) => OrderingTerm.desc(t.startedAt)]))
+        .get();
+  }
+
+  Future<List<Deposit>> getDepositsByTour(int tourId) {
+    return (select(deposits)
+          ..where((t) => t.tourId.equals(tourId))
+          ..orderBy([(t) => OrderingTerm.desc(t.createdAt)]))
+        .get();
+  }
+
+  Stream<List<Deposit>> watchDepositsByTour(int tourId) {
+    return (select(deposits)
+          ..where((t) => t.tourId.equals(tourId))
+          ..orderBy([(t) => OrderingTerm.desc(t.createdAt)]))
+        .watch();
+  }
+
+  Stream<int> watchNeedsReviewCountByTour(int tourId) {
+    final q = selectOnly(deposits)
+      ..addColumns([deposits.id.count()])
+      ..where(
+        deposits.tourId.equals(tourId) & deposits.deliveryStatus.equals(2),
+      );
+
+    return q.watch().map((rows) {
+      final row = rows.single;
+      return row.read(deposits.id.count()) ?? 0;
+    });
+  }
 
   // ---------- INSERT / UPDATE ----------
 
@@ -84,9 +148,10 @@ class AppDb extends _$AppDb {
     required double lon,
     required double accuracy,
     String? addressLabel,
-    int deliveryStatus = 2, // default: À vérifier
+    int deliveryStatus = 2,
     bool buildingSuspected = false,
     int? groupId,
+    int? tourId,
   }) {
     return into(deposits).insert(
       DepositsCompanion.insert(
@@ -98,6 +163,7 @@ class AppDb extends _$AppDb {
         deliveryStatus: Value(deliveryStatus),
         buildingSuspected: Value(buildingSuspected),
         groupId: Value(groupId),
+        tourId: Value(tourId),
       ),
     );
   }
@@ -107,11 +173,17 @@ class AppDb extends _$AppDb {
       DepositsCompanion(deliveryStatus: Value(newStatus)),
     );
   }
-              Future<Deposit?> getLastDeposit() {
-    return (select(deposits)
-          ..orderBy([(t) => OrderingTerm.desc(t.createdAt)])
-          ..limit(1))
-        .getSingleOrNull();
+
+  Future<Deposit?> getLastDeposit({int? tourId}) {
+    final q = select(deposits)
+      ..orderBy([(t) => OrderingTerm.desc(t.createdAt)])
+      ..limit(1);
+
+    if (tourId != null) {
+      q.where((t) => t.tourId.equals(tourId));
+    }
+
+    return q.getSingleOrNull();
   }
 
   Future<void> setNoAdById(int depositId, bool value) {
@@ -130,7 +202,7 @@ class AppDb extends _$AppDb {
     return count > 0;
   }
 
-  // ---------- WATCH / QUERIES ----------
+  // ---------- WATCH / QUERIES GLOBALES ----------
 
   Stream<int> watchCount() {
     return select(deposits).watch().map((rows) => rows.length);
@@ -158,22 +230,22 @@ class AppDb extends _$AppDb {
       final row = rows.single;
       return row.read(deposits.id.count()) ?? 0;
     });
-    
   }
-Stream<List<Deposit>> watchDepositsByGroup(int groupId) {
-  return (select(deposits)
-        ..where((t) => t.groupId.equals(groupId))
-        ..orderBy([(t) => OrderingTerm.desc(t.createdAt)]))
-      .watch();
-}
 
-Future<void> updateGroupStatus(int groupId, int newStatus) {
-  return (update(deposits)..where((t) => t.groupId.equals(groupId))).write(
-    DepositsCompanion(deliveryStatus: Value(newStatus)),
-  );
-}
+  Stream<List<Deposit>> watchDepositsByGroup(int groupId) {
+    return (select(deposits)
+          ..where((t) => t.groupId.equals(groupId))
+          ..orderBy([(t) => OrderingTerm.desc(t.createdAt)]))
+        .watch();
+  }
 
-  // ---------- GROUPING (immeubles) ----------
+  Future<void> updateGroupStatus(int groupId, int newStatus) {
+    return (update(deposits)..where((t) => t.groupId.equals(groupId))).write(
+      DepositsCompanion(deliveryStatus: Value(newStatus)),
+    );
+  }
+
+  // ---------- GROUPING ----------
 
   Future<List<DeliveryGroup>> getRecentGroups(DateTime since) {
     return (select(deliveryGroups)

@@ -1,4 +1,3 @@
-
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
@@ -54,7 +53,7 @@ class _DistributionPageState extends ConsumerState<DistributionPage> {
                 child: ElevatedButton(
                   onPressed: () {
                     Navigator.pop(ctx);
-                    controller.confirmPendingDeposit(0); // livré
+                    controller.confirmPendingDeposit(0);
                   },
                   child: const Text('Accès OK → Livré'),
                 ),
@@ -66,7 +65,7 @@ class _DistributionPageState extends ConsumerState<DistributionPage> {
                 child: OutlinedButton(
                   onPressed: () {
                     Navigator.pop(ctx);
-                    controller.confirmPendingDeposit(1); // pas accès
+                    controller.confirmPendingDeposit(1);
                   },
                   child: const Text('Accès impossible → Non livré'),
                 ),
@@ -78,7 +77,7 @@ class _DistributionPageState extends ConsumerState<DistributionPage> {
                 child: TextButton(
                   onPressed: () {
                     Navigator.pop(ctx);
-                    controller.confirmPendingDeposit(2); // à vérifier
+                    controller.confirmPendingDeposit(2);
                   },
                   child: const Text('Je ne sais pas → À vérifier'),
                 ),
@@ -97,15 +96,14 @@ class _DistributionPageState extends ConsumerState<DistributionPage> {
     _sheetOpen = false;
   }
 
-  /// ✅ Export + reset tournée (bouton redevient Commencer)
   Future<void> _endTour() async {
     final db = ref.read(appDbProvider);
     final controller = ref.read(distributionControllerProvider.notifier);
+    final state = ref.read(distributionControllerProvider);
 
-    // récupère tous les dépôts
-    final rows = await db.select(db.deposits).get();
+    final tourId = state.currentTourId;
+    final rows = tourId == null ? <Deposit>[] : await db.getDepositsByTour(tourId);
 
-    // Choix CSV/PDF (même si vide on peut reset)
     final action = await showModalBottomSheet<String>(
       context: context,
       builder: (ctx) => SafeArea(
@@ -135,40 +133,42 @@ class _DistributionPageState extends ConsumerState<DistributionPage> {
 
     if (action == null) return;
 
-    // Export si demandé ET si on a des dépôts
-    if (action != 'none') {
-      if (rows.isEmpty) {
-        if (!mounted) return;
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(content: Text('Aucun dépôt à exporter')),
-        );
-      } else {
-        if (action == 'csv') {
-          await _exporter.exportCsv(
-            rows: rows,
-            title: 'FlyerTrack_Tournee',
+    try {
+      if (action != 'none') {
+        if (rows.isEmpty) {
+          if (!mounted) return;
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(content: Text('Aucun dépôt à exporter')),
           );
         } else {
-          await _exporter.exportPdf(
-            rows: rows,
-            title: 'FlyerTrack_Tournee',
-          );
+          final title = tourId == null
+              ? 'FlyerTrack_Tournee'
+              : 'FlyerTrack_Tournee_$tourId';
+
+          if (action == 'csv') {
+            await _exporter.exportCsv(rows: rows, title: title);
+          } else {
+            await _exporter.exportPdf(rows: rows, title: title);
+          }
         }
       }
+
+      await controller.endTour();
+
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Tournée terminée')),
+      );
+    } catch (e) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Erreur export : $e')),
+      );
     }
-
-    // ✅ reset tournée quoi qu’il arrive
-    await controller.endTour();
-
-    if (!mounted) return;
-    ScaffoldMessenger.of(context).showSnackBar(
-      const SnackBar(content: Text('Tournée terminée')),
-    );
   }
 
   @override
   Widget build(BuildContext context) {
-    // ✅ Riverpod: ouvrir la sheet quand pendingDepositId apparaît
     ref.listen(distributionControllerProvider, (prev, next) {
       final prevId = prev?.pendingDepositId;
       final nextId = next.pendingDepositId;
@@ -186,7 +186,6 @@ class _DistributionPageState extends ConsumerState<DistributionPage> {
 
     final isRunning = state.runState == DistributionRunState.running;
 
-    // ✅ logique bouton fiable
     late final String buttonLabel;
     late final VoidCallback buttonAction;
 
@@ -200,6 +199,10 @@ class _DistributionPageState extends ConsumerState<DistributionPage> {
       buttonLabel = 'Reprendre';
       buttonAction = () => controller.startOrResume();
     }
+
+    final reviewStream = state.currentTourId == null
+        ? db.watchNeedsReviewCount()
+        : db.watchNeedsReviewCountByTour(state.currentTourId!);
 
     return Scaffold(
       appBar: AppBar(
@@ -235,7 +238,6 @@ class _DistributionPageState extends ConsumerState<DistributionPage> {
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            // ✅ Mini aperçu carte (apparaît après Commencer car current != null)
             if (state.current != null) ...[
               ClipRRect(
                 borderRadius: BorderRadius.circular(18),
@@ -250,8 +252,6 @@ class _DistributionPageState extends ConsumerState<DistributionPage> {
               ),
               const SizedBox(height: 16),
             ],
-
-            // ✅ Stats "Apple minimal"
             Card(
               elevation: 0,
               child: Padding(
@@ -260,22 +260,35 @@ class _DistributionPageState extends ConsumerState<DistributionPage> {
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
                     Text(
-                      isRunning ? 'En distribution' : (state.hasStarted ? 'En pause' : 'Prêt'),
+                      isRunning
+                          ? 'En distribution'
+                          : (state.hasStarted ? 'En pause' : 'Prêt'),
                       style: const TextStyle(
                         fontSize: 18,
                         fontWeight: FontWeight.w600,
                       ),
                     ),
+                    if (state.currentTourId != null) ...[
+                      const SizedBox(height: 6),
+                      Text(
+                        'Tournée #${state.currentTourId}',
+                        style: const TextStyle(fontSize: 13),
+                      ),
+                    ],
                     const SizedBox(height: 12),
-                    Text('Livrés: ${state.totalDelivered}',
-                        style: const TextStyle(fontSize: 16)),
+                    Text(
+                      'Livrés: ${state.totalDelivered}',
+                      style: const TextStyle(fontSize: 16),
+                    ),
                     const SizedBox(height: 6),
                     StreamBuilder<int>(
-                      stream: db.watchNeedsReviewCount(),
+                      stream: reviewStream,
                       builder: (context, snapshot) {
                         final count = snapshot.data ?? 0;
-                        return Text('À vérifier: $count',
-                            style: const TextStyle(fontSize: 16));
+                        return Text(
+                          'À vérifier: $count',
+                          style: const TextStyle(fontSize: 16),
+                        );
                       },
                     ),
                     const SizedBox(height: 6),
@@ -287,39 +300,40 @@ class _DistributionPageState extends ConsumerState<DistributionPage> {
                 ),
               ),
             ),
-
             const Spacer(),
-
-           Row(
-  children: [
-    Expanded(
-      child: SizedBox(
-        height: 56,
-        child: ElevatedButton(
-          onPressed: buttonAction,
-          child: Text(buttonLabel, style: const TextStyle(fontSize: 20)),
-        ),
-      ),
-    ),
-    const SizedBox(width: 12),
-
-    // ✅ Bouton minimaliste "Pas de pub"
-    SizedBox(
-      height: 56,
-      child: OutlinedButton.icon(
-        onPressed: () async {
-          await controller.markNoAd(); // 👈 on va coder cette méthode
-          if (!context.mounted) return;
-          ScaffoldMessenger.of(context).showSnackBar(
-            const SnackBar(content: Text('✅ Marqué “Pas de pub”')),
-          );
-        },
-        icon: const Icon(Icons.block),
-        label: const Text('Pas de pub'),
-      ),
-    ),
-  ],
-),
+            Row(
+              children: [
+                Expanded(
+                  child: SizedBox(
+                    height: 56,
+                    child: ElevatedButton(
+                      onPressed: buttonAction,
+                      child: Text(
+                        buttonLabel,
+                        style: const TextStyle(fontSize: 20),
+                      ),
+                    ),
+                  ),
+                ),
+                const SizedBox(width: 12),
+                SizedBox(
+                  height: 56,
+                  child: OutlinedButton.icon(
+                    onPressed: () async {
+                      await controller.markNoAd();
+                      if (!context.mounted) return;
+                      ScaffoldMessenger.of(context).showSnackBar(
+                        const SnackBar(
+                          content: Text('✅ Marqué “Pas de pub”'),
+                        ),
+                      );
+                    },
+                    icon: const Icon(Icons.block),
+                    label: const Text('Pas de pub'),
+                  ),
+                ),
+              ],
+            ),
           ],
         ),
       ),
@@ -327,7 +341,6 @@ class _DistributionPageState extends ConsumerState<DistributionPage> {
   }
 }
 
-/// ✅ Mini carte non interactive (preview)
 class LiveMapPreview extends StatelessWidget {
   final LatLng center;
   final List<LatLng> route;
