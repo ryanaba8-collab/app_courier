@@ -3,6 +3,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_map/flutter_map.dart';
 import 'package:latlong2/latlong.dart';
 
+import '../../../core/db/app_db.dart';
 import '../../../core/db/db_provider.dart';
 import '../application/distribution_controller.dart';
 
@@ -14,27 +15,33 @@ class LiveMapPage extends ConsumerWidget {
     final state = ref.watch(distributionControllerProvider);
     final db = ref.watch(appDbProvider);
 
-    // Position actuelle (fallback: Paris)
     final cur = state.current ?? const LatLng(48.8566, 2.3522);
+    final tourId = state.currentTourId;
+
+    final Stream<List<Deposit>> depositsStream =
+        tourId == null ? Stream.value(<Deposit>[]) : db.watchDepositsByTour(tourId);
 
     return Scaffold(
-      appBar: AppBar(title: const Text('Carte (Live)')),
-      body: StreamBuilder(
-        stream: db.watchAllDeposits(),
+      appBar: AppBar(
+        title: const Text('Carte (Live)'),
+      ),
+      body: StreamBuilder<List<Deposit>>(
+        stream: depositsStream,
         builder: (context, snapshot) {
-          final deposits = snapshot.data ?? const [];
+          final deposits = snapshot.data ?? const <Deposit>[];
 
           final markers = <Marker>[];
 
-          // Dépôts (markers)
           for (final d in deposits) {
             final pos = LatLng(d.lat, d.lon);
 
-            final icon = d.deliveryStatus == 0
-                ? Icons.check_circle
-                : d.deliveryStatus == 1
-                    ? Icons.cancel
-                    : Icons.warning;
+            final icon = d.noAd
+                ? Icons.block
+                : d.deliveryStatus == 0
+                    ? Icons.check_circle
+                    : d.deliveryStatus == 1
+                        ? Icons.cancel
+                        : Icons.warning;
 
             markers.add(
               Marker(
@@ -46,7 +53,6 @@ class LiveMapPage extends ConsumerWidget {
             );
           }
 
-          // Position actuelle (marker)
           markers.add(
             Marker(
               point: cur,
@@ -56,8 +62,7 @@ class LiveMapPage extends ConsumerWidget {
             ),
           );
 
-          final route = state.route;
-          final fullTrack = state.route;
+          final track = state.route;
 
           return FlutterMap(
             options: MapOptions(
@@ -69,25 +74,12 @@ class LiveMapPage extends ConsumerWidget {
                 urlTemplate: 'https://tile.openstreetmap.org/{z}/{x}/{y}.png',
                 userAgentPackageName: 'com.appcourier.app',
               ),
-
-              // Route ORS
-              // ✅ Tracé complet (tournée réelle)
-if (fullTrack.isNotEmpty)
-  PolylineLayer(
-    polylines: [
-      Polyline(points: fullTrack, strokeWidth: 4),
-    ],
-  ),
-
-// ✅ Route ORS (itinéraire vers la prochaine cible)
-if (route.isNotEmpty)
-  PolylineLayer(
-    polylines: [
-      Polyline(points: route, strokeWidth: 6),
-    ],
-  ),
-
-
+              if (track.isNotEmpty)
+                PolylineLayer(
+                  polylines: [
+                    Polyline(points: track, strokeWidth: 4),
+                  ],
+                ),
               MarkerLayer(markers: markers),
             ],
           );

@@ -6,12 +6,12 @@ import 'package:latlong2/latlong.dart';
 
 import '../../../core/db/app_db.dart';
 import '../../../core/db/db_provider.dart';
-
 import '../application/distribution_controller.dart';
 import '../application/export_service.dart';
 
 import 'history_page.dart';
 import 'live_map_page.dart';
+import 'tournees_page.dart';
 
 class DistributionPage extends ConsumerStatefulWidget {
   const DistributionPage({super.key});
@@ -222,6 +222,18 @@ class _DistributionPageState extends ConsumerState<DistributionPage> {
               );
             },
           ),
+         
+          IconButton(
+  icon: const Icon(Icons.inventory_2_outlined),
+  tooltip: 'Tournées',
+  onPressed: () {
+    Navigator.of(context).push(
+      MaterialPageRoute(
+        builder: (_) => const TourneesPage(),
+      ),
+    );
+  },
+),
           IconButton(
             icon: const Icon(Icons.history),
             tooltip: 'Historique',
@@ -268,13 +280,7 @@ class _DistributionPageState extends ConsumerState<DistributionPage> {
                         fontWeight: FontWeight.w600,
                       ),
                     ),
-                    if (state.currentTourId != null) ...[
-                      const SizedBox(height: 6),
-                      Text(
-                        'Tournée #${state.currentTourId}',
-                        style: const TextStyle(fontSize: 13),
-                      ),
-                    ],
+                    
                     const SizedBox(height: 12),
                     Text(
                       'Livrés: ${state.totalDelivered}',

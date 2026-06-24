@@ -1,7 +1,7 @@
 import 'dart:io';
+import 'dart:ui';
 
 import 'package:csv/csv.dart';
-import 'package:drift/drift.dart' show Value;
 import 'package:pdf/pdf.dart';
 import 'package:pdf/widgets.dart' as pw;
 import 'package:path/path.dart' as p;
@@ -44,6 +44,8 @@ class ExportService {
         'deliveryStatus',
         'buildingSuspected',
         'groupId',
+        'tourId',
+        'noAd',
       ],
       ...rows.map((d) => [
             d.id,
@@ -55,13 +57,16 @@ class ExportService {
             _statusLabel(d.deliveryStatus),
             d.buildingSuspected ? '1' : '0',
             d.groupId?.toString() ?? '',
+            d.tourId?.toString() ?? '',
+            d.noAd ? '1' : '0',
           ]),
     ];
 
     final csv = const ListToCsvConverter().convert(csvRows);
 
     final safeTitle = title.replaceAll(RegExp(r'[^a-zA-Z0-9_-]'), '_');
-    final filename = 'export_${safeTitle}_${DateTime.now().millisecondsSinceEpoch}.csv';
+    final filename =
+        'export_${safeTitle}_${DateTime.now().millisecondsSinceEpoch}.csv';
 
     final file = await _writeFile(filename, csv.codeUnits);
 
@@ -69,6 +74,7 @@ class ExportService {
       [XFile(file.path)],
       subject: 'Export CSV - $title',
       text: 'Export CSV - $title',
+      sharePositionOrigin: const Rect.fromLTWH(0, 0, 1, 1),
     );
   }
 
@@ -83,8 +89,13 @@ class ExportService {
         pageFormat: PdfPageFormat.a4,
         build: (context) {
           return [
-            pw.Text('Export - $title',
-                style: pw.TextStyle(fontSize: 18, fontWeight: pw.FontWeight.bold)),
+            pw.Text(
+              'Export - $title',
+              style: pw.TextStyle(
+                fontSize: 18,
+                fontWeight: pw.FontWeight.bold,
+              ),
+            ),
             pw.SizedBox(height: 12),
             pw.Table.fromTextArray(
               headers: const [
@@ -92,13 +103,19 @@ class ExportService {
                 'Adresse',
                 'Statut',
                 'Acc(m)',
+                'NoAd',
               ],
               data: rows.take(300).map((d) {
                 return [
-                  d.createdAt.toIso8601String().replaceFirst('T', ' ').split('.').first,
+                  d.createdAt
+                      .toIso8601String()
+                      .replaceFirst('T', ' ')
+                      .split('.')
+                      .first,
                   (d.addressLabel ?? '').take(60),
                   _statusLabel(d.deliveryStatus),
                   d.accuracy.toStringAsFixed(0),
+                  d.noAd ? 'Oui' : 'Non',
                 ];
               }).toList(),
               headerStyle: pw.TextStyle(fontWeight: pw.FontWeight.bold),
@@ -107,15 +124,18 @@ class ExportService {
             ),
             pw.SizedBox(height: 8),
             if (rows.length > 300)
-              pw.Text('Note: PDF limité à 300 lignes (CSV contient tout).',
-                  style: const pw.TextStyle(fontSize: 10)),
+              pw.Text(
+                'Note: PDF limité à 300 lignes (CSV contient tout).',
+                style: const pw.TextStyle(fontSize: 10),
+              ),
           ];
         },
       ),
     );
 
     final safeTitle = title.replaceAll(RegExp(r'[^a-zA-Z0-9_-]'), '_');
-    final filename = 'export_${safeTitle}_${DateTime.now().millisecondsSinceEpoch}.pdf';
+    final filename =
+        'export_${safeTitle}_${DateTime.now().millisecondsSinceEpoch}.pdf';
 
     final file = await _writeFile(filename, await doc.save());
 
@@ -123,6 +143,7 @@ class ExportService {
       [XFile(file.path)],
       subject: 'Export PDF - $title',
       text: 'Export PDF - $title',
+      sharePositionOrigin: const Rect.fromLTWH(0, 0, 1, 1),
     );
   }
 }

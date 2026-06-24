@@ -272,6 +272,44 @@ class AppDb extends _$AppDb {
       ),
     );
   }
+  Future<void> deleteTourAndDeposits(int tourId) async {
+  await transaction(() async {
+    await (delete(deposits)..where((t) => t.tourId.equals(tourId))).go();
+    await (delete(tours)..where((t) => t.id.equals(tourId))).go();
+  });
+}
+
+Stream<List<Tour>> watchAllTours() {
+  return (select(tours)
+        ..orderBy([(t) => OrderingTerm.desc(t.startedAt)]))
+      .watch();
+}
+
+Future<int> countDeliveredByTour(int tourId) async {
+  final rows = await (select(deposits)
+        ..where((t) =>
+            t.tourId.equals(tourId) & t.deliveryStatus.equals(0)))
+      .get();
+
+  return rows.length;
+}
+
+Future<int> countReviewByTour(int tourId) async {
+  final rows = await (select(deposits)
+        ..where((t) =>
+            t.tourId.equals(tourId) & t.deliveryStatus.equals(2)))
+      .get();
+
+  return rows.length;
+}
+
+Future<int> countNoAdByTour(int tourId) async {
+  final rows = await (select(deposits)
+        ..where((t) => t.tourId.equals(tourId) & t.noAd.equals(true)))
+      .get();
+
+  return rows.length;
+}
 }
 
 LazyDatabase _openConnection() {
