@@ -14,11 +14,15 @@ import '../infrastructure/ban_api.dart';
 import '../infrastructure/ors_api.dart';
 import 'passage_detector.dart';
 import 'stop_detector.dart';
-
+enum DistributionMode {
+  automatic,
+  manual,
+}
 enum DistributionRunState { running, paused }
 
 class DistributionState {
   final DistributionRunState runState;
+  final DistributionMode mode;
   final bool hasStarted;
   final int totalDelivered;
 
@@ -34,6 +38,7 @@ class DistributionState {
 
   const DistributionState({
     required this.runState,
+    required this.mode,
     required this.hasStarted,
     required this.totalDelivered,
     this.lastAddressLabel,
@@ -46,6 +51,7 @@ class DistributionState {
 
   DistributionState copyWith({
     DistributionRunState? runState,
+    DistributionMode? mode,
     bool? hasStarted,
     int? totalDelivered,
     String? lastAddressLabel,
@@ -59,6 +65,7 @@ class DistributionState {
   }) {
     return DistributionState(
       runState: runState ?? this.runState,
+      mode: mode ?? this.mode,
       hasStarted: hasStarted ?? this.hasStarted,
       totalDelivered: totalDelivered ?? this.totalDelivered,
       lastAddressLabel: lastAddressLabel ?? this.lastAddressLabel,
@@ -94,6 +101,7 @@ class DistributionController extends StateNotifier<DistributionState> {
         _ors = ors,
         super(const DistributionState(
           runState: DistributionRunState.paused,
+          mode: DistributionMode.automatic,
           hasStarted: false,
           totalDelivered: 0,
           lastAddressLabel: null,
@@ -103,6 +111,13 @@ class DistributionController extends StateNotifier<DistributionState> {
           route: [],
           currentTourId: null,
         ));
+   void setMode(DistributionMode mode) {
+  state = state.copyWith(mode: mode);
+
+  // Quand on change de mode, on reset la détection pour éviter les faux dépôts
+  _passageDetector.resetAll();
+  _gpsStabilizer.resetAll();
+}     
 
   Future<void> startOrResume() async {
     await _ensurePermissions();
@@ -159,10 +174,12 @@ class DistributionController extends StateNotifier<DistributionState> {
 
       _appendRoutePoint(cur, fix.accuracy);
 
-      final passage = _passageDetector.ingest(fix);
-      if (passage != null) {
-        _handlePassage(passage);
-      }
+      if (state.mode == DistributionMode.automatic) {
+  final passage = _passageDetector.ingest(fix);
+  if (passage != null) {
+    _handlePassage(passage);
+  }
+}
     });
   }
 
@@ -201,7 +218,30 @@ class DistributionController extends StateNotifier<DistributionState> {
       clearTour: true,
     );
   }
+Future<void> registerDeposit() async {
+  final cur = state.current;
+  if (cur == null) return;
 
+  await _db.insertDeposit(
+    createdAt: DateTime.now(),
+    lat: cur.latitude,
+    lon: cur.longitude,
+    accuracy: 50,
+    addressLabel: state.lastAddressLabel,
+    deliveryStatus: 0,
+    buildingSuspected: false,
+    groupId: null,
+    tourId: state.currentTourId,
+  );
+
+  state = state.copyWith(
+    totalDelivered: state.totalDelivered + 1,
+  );
+
+  _lastSavedLabel = state.lastAddressLabel;
+  _lastSavedAt = DateTime.now();
+  _lastSavedPos = cur;
+}
   Future<void> markNoAd() async {
     final tourId = state.currentTourId;
     final last = await _db.getLastDeposit(tourId: tourId);

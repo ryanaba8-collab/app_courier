@@ -12,7 +12,7 @@ import '../application/export_service.dart';
 import 'history_page.dart';
 import 'live_map_page.dart';
 import 'tournees_page.dart';
-
+import 'package:flutter/services.dart';
 class DistributionPage extends ConsumerStatefulWidget {
   const DistributionPage({super.key});
 
@@ -204,7 +204,40 @@ class _DistributionPageState extends ConsumerState<DistributionPage> {
         ? db.watchNeedsReviewCount()
         : db.watchNeedsReviewCountByTour(state.currentTourId!);
 
-    return Scaffold(
+    
+    return Focus(
+  autofocus: true,
+  onKeyEvent: (node, event) {
+    if (event is KeyDownEvent &&
+        state.mode == DistributionMode.manual) {
+debugPrint(
+  'TOUCHE TELECOMMANDE: ${event.logicalKey.keyLabel} / ${event.logicalKey.debugName}',
+);
+      final key = event.logicalKey;
+
+      final isRemoteClick =
+    key == LogicalKeyboardKey.enter ||
+    key == LogicalKeyboardKey.space ||
+    key == LogicalKeyboardKey.select ||
+    key == LogicalKeyboardKey.pageDown ||
+    key == LogicalKeyboardKey.audioVolumeUp;
+
+      if (isRemoteClick) {
+        controller.registerDeposit();
+
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text('📬 Dépôt enregistré'),
+          ),
+        );
+
+        return KeyEventResult.handled;
+      }
+    }
+
+    return KeyEventResult.ignored;
+  },
+  child: Scaffold(
       appBar: AppBar(
         title: const Text('Distribution'),
         actions: [
@@ -265,6 +298,31 @@ class _DistributionPageState extends ConsumerState<DistributionPage> {
               const SizedBox(height: 16),
             ],
             Card(
+  elevation: 0,
+  child: Padding(
+    padding: const EdgeInsets.all(12),
+    child: SegmentedButton<DistributionMode>(
+      segments: const [
+        ButtonSegment(
+          value: DistributionMode.automatic,
+          icon: Icon(Icons.auto_mode),
+          label: Text("Auto"),
+        ),
+        ButtonSegment(
+          value: DistributionMode.manual,
+          icon: Icon(Icons.touch_app),
+          label: Text("Manuel"),
+        ),
+      ],
+      selected: {state.mode},
+      onSelectionChanged: (selection) {
+        controller.setMode(selection.first);
+      },
+    ),
+  ),
+),
+const SizedBox(height: 12),
+            Card(
               elevation: 0,
               child: Padding(
                 padding: const EdgeInsets.all(16),
@@ -307,42 +365,64 @@ class _DistributionPageState extends ConsumerState<DistributionPage> {
               ),
             ),
             const Spacer(),
-            Row(
-              children: [
-                Expanded(
-                  child: SizedBox(
-                    height: 56,
-                    child: ElevatedButton(
-                      onPressed: buttonAction,
-                      child: Text(
-                        buttonLabel,
-                        style: const TextStyle(fontSize: 20),
-                      ),
-                    ),
-                  ),
-                ),
-                const SizedBox(width: 12),
-                SizedBox(
-                  height: 56,
-                  child: OutlinedButton.icon(
-                    onPressed: () async {
-                      await controller.markNoAd();
-                      if (!context.mounted) return;
-                      ScaffoldMessenger.of(context).showSnackBar(
-                        const SnackBar(
-                          content: Text('✅ Marqué “Pas de pub”'),
-                        ),
-                      );
-                    },
-                    icon: const Icon(Icons.block),
-                    label: const Text('Pas de pub'),
-                  ),
-                ),
-              ],
-            ),
+           Row(
+  mainAxisAlignment: MainAxisAlignment.spaceBetween,
+  children: [
+    SizedBox(
+      height: 56,
+      child: OutlinedButton.icon(
+        onPressed: () async {
+          await controller.markNoAd();
+          if (!context.mounted) return;
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(content: Text('✅ Marqué “Pas de pub”')),
+          );
+        },
+        icon: const Icon(Icons.block),
+        label: const Text('Pas de pub'),
+      ),
+    ),
+
+    if (state.mode == DistributionMode.manual)
+      SizedBox(
+        width: 96,
+        height: 96,
+        child: FilledButton(
+          style: FilledButton.styleFrom(
+            shape: const CircleBorder(),
+            padding: EdgeInsets.zero,
+          ),
+          onPressed: () async {
+            await controller.registerDeposit();
+            if (!context.mounted) return;
+            ScaffoldMessenger.of(context).showSnackBar(
+              const SnackBar(content: Text('📬 Dépôt enregistré')),
+            );
+          },
+          child: const Column(
+            mainAxisAlignment: MainAxisAlignment.center,
+            children: [
+              Icon(Icons.markunread_mailbox, size: 28),
+              SizedBox(height: 4),
+              Text('DÉPOSÉ', style: TextStyle(fontSize: 11)),
+            ],
+          ),
+        ),
+      ),
+
+    SizedBox(
+      height: 56,
+      child: ElevatedButton(
+        onPressed: buttonAction,
+        child: Text(buttonLabel),
+      ),
+    ),
+  ],
+)
           ],
         ),
       ),
+     ), 
     );
   }
 }
